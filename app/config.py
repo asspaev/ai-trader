@@ -6,8 +6,7 @@
 ``.env.example``.
 
 На текущей фазе подключены группы: Database, Logging, AgentModels,
-Binance, OpenRouter, CryptoPanic, Trading, Scheduler. Группа Telegram
-добавится в фазе 9.
+Binance, OpenRouter, CryptoPanic, Trading, Scheduler, Telegram.
 """
 
 from __future__ import annotations
@@ -278,6 +277,40 @@ class SchedulerSettings(BaseSettings):
         return value
 
 
+class TelegramSettings(BaseSettings):
+    """Параметры Telegram-бота (aiogram 3).
+
+    Используется единственный bot-token, авторизация — по
+    ``telegram_id`` пользователя из таблицы ``users`` (см.
+    ``app/services/telegram/handlers.py``). Лимиты ``history_limit_*``
+    защищают команду ``/history N`` от запроса абсурдных N — пользователь
+    может ввести любое число, но фактически берётся ``min(N, max)``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="TELEGRAM_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    bot_token: str = Field(
+        default="",
+        description="Telegram Bot API token (BotFather)",
+    )
+    history_limit_default: int = 10
+    history_limit_max: int = 50
+
+    @field_validator("history_limit_default", "history_limit_max")
+    @classmethod
+    def _validate_history_limit(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(
+                f"TELEGRAM history limits must be positive, got {value}"
+            )
+        return value
+
+
 class Settings:
     """Композитный контейнер всех групп настроек."""
 
@@ -290,6 +323,7 @@ class Settings:
         self.cryptopanic = CryptoPanicSettings()
         self.trading = TradingSettings()
         self.scheduler = SchedulerSettings()
+        self.telegram = TelegramSettings()
 
 
 settings = Settings()
