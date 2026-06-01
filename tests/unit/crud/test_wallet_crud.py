@@ -67,12 +67,19 @@ async def test_add_balance_creates_or_increments(session):
     created = await wallet_crud.add_balance(
         session, user_id=user_id, asset="TON", delta=Decimal("2.5")
     )
+    # Снимок балансом сразу после создания: ORM возвращает один и тот же
+    # инстанс (identity-map), поэтому после второго вызова поле ``balance``
+    # на ``created`` уже изменится.
+    balance_after_create = created.balance
+    created_id = created.id
+
     incremented = await wallet_crud.add_balance(
         session, user_id=user_id, asset="TON", delta=Decimal("1.25")
     )
 
-    assert created.balance == Decimal("2.500000000000")
+    assert balance_after_create == Decimal("2.500000000000")
     assert incremented.balance == Decimal("3.750000000000")
+    assert incremented.id == created_id
 
 
 async def test_list_for_user_sorted_by_asset(session):
