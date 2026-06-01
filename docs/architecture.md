@@ -59,9 +59,6 @@
 ├── pyproject.toml
 ├── poetry.lock
 ├── alembic.ini
-├── alembic/
-│   ├── env.py
-│   └── versions/
 ├── docs/
 │   ├── idea.md
 │   ├── clarifications.md
@@ -80,6 +77,9 @@
     ├── config.py            ← pydantic-settings, разбит на классы
     ├── logger.py            ← loguru configuration
     ├── db.py                ← async engine + session factory
+    ├── alembic/             ← миграции (script_location = app/alembic в alembic.ini)
+    │   ├── env.py
+    │   └── versions/
     ├── models/              ← SQLAlchemy ORM
     │   ├── __init__.py
     │   ├── base.py
