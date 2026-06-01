@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import cached_property
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 _ENV_FILE = ".env"
@@ -180,7 +181,12 @@ class TradingSettings(BaseSettings):
     )
 
     initial_capital_rub: Decimal = Decimal("100000")
-    symbols: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "TON"])
+    # NoDecode — отключаем авто-JSON-парсинг для ENV-значения, чтобы
+    # ``TRADING_SYMBOLS=BTC,ETH,TON`` (CSV) не падал на ``json.loads``.
+    # CSV-парсинг выполняет валидатор ``_split_symbols`` ниже.
+    symbols: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["BTC", "ETH", "TON"]
+    )
     quote_asset: str = "USDT"
     decisions_history_limit: int = 12
     rag_top_k: int = 5
