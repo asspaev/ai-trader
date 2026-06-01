@@ -26,8 +26,7 @@ LLM — OpenRouter (по умолчанию `deepseek/deepseek-chat` для вс
 app/
 ├── main.py            # запуск scheduler + telegram bot через asyncio.gather
 ├── config.py          # pydantic-settings, разбит по группам (DatabaseSettings, BinanceSettings, ...)
-├── logger.py
-├── db.py
+├── core/              # async engine + session factory (db.py), loguru config (logger.py)
 ├── models/            # SQLAlchemy ORM
 ├── crud/              # ВСЕ обращения к БД только отсюда
 └── services/
@@ -109,7 +108,7 @@ alembic/  docs/  scripts/  tests/
 
 Каждая фаза — самодостаточный задел, после неё проект собирается / соответствующие тесты зелёные.
 
-0. Скелет: `pyproject.toml`, Dockerfile, compose, `config.py` (DB+Logging), `db.py`, `logger.py`, alembic init, entrypoint.
+0. Скелет: `pyproject.toml`, Dockerfile, compose, `config.py` (DB+Logging), `core/db.py`, `core/logger.py`, alembic init, entrypoint.
 1. Модели + CRUD + миграции (включая `CREATE EXTENSION vector` и IVFFlat). Unit-тесты CRUD на testcontainers postgres.
 2. Binance клиент + mock-биржа + таймфрейм-агрегация. Тесты комиссий, lot/notional.
 3. `scripts/init_user.py` (RUB→USDT, создание users + wallets).

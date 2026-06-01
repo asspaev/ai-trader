@@ -75,8 +75,10 @@
     ├── __init__.py
     ├── main.py              ← запуск: scheduler + telegram bot через asyncio.gather
     ├── config.py            ← pydantic-settings, разбит на классы
-    ├── logger.py            ← loguru configuration
-    ├── db.py                ← async engine + session factory
+    ├── core/                ← общая инфраструктура (БД, логирование)
+    │   ├── __init__.py
+    │   ├── db.py            ← async engine + session factory
+    │   └── logger.py        ← loguru configuration
     ├── alembic/             ← миграции (script_location = app/alembic в alembic.ini)
     │   ├── env.py
     │   └── versions/
@@ -136,6 +138,8 @@
 ```
 
 **Правило:** все взаимодействия с БД — через `app/crud/*`. Никакие сервисы не пишут `select`/`insert` сами.
+
+**Соглашение по структуре `app/`.** Внутри `app/` модулями верхнего уровня остаются только `main.py` и `config.py`. Всё остальное — пакеты (`core/`, `models/`, `crud/`, `services/`, `alembic/`). Это упрощает навигацию и делает границы слоёв явными.
 
 ---
 
@@ -694,7 +698,7 @@ exec python -m app.main
 - `pyproject.toml`, базовые зависимости.
 - `Dockerfile`, `docker-compose.yml`.
 - `app/config.py` (только Database + Logging).
-- `app/db.py`, `app/logger.py`.
+- `app/core/db.py`, `app/core/logger.py`.
 - `alembic` init, пустая первая миграция.
 - `scripts/entrypoint.sh`.
 

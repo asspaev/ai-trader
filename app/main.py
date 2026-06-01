@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from app.db import dispose_engine
-from app.logger import configure_logging, logger
+from app.core.db import dispose_engine
+from app.core.logger import configure_logging, logger
 
 
 async def _run() -> None:
