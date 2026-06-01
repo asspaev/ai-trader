@@ -17,12 +17,26 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from decimal import Decimal
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain(text: str) -> str:
+    """Снять HTML-теги для assertion-friendly сравнения.
+
+    После перехода на ``parse_mode=HTML`` форматтеры обёртывают значения
+    в ``<b>`` / ``<code>`` / ``<blockquote>`` — содержательная часть
+    осталась той же, поэтому большая часть существующих ассертов
+    переиспользуется как есть, но на «очищенном» тексте.
+    """
+    return _HTML_TAG_RE.sub("", text)
 
 from app.crud import user as user_crud
 from app.crud import wallet as wallet_crud
@@ -70,10 +84,10 @@ def test_format_step_message_hold_success_includes_reasoning() -> None:
         executed=True,
         transaction=None,
     )
-    text = format_step_message(step)
+    text = _plain(format_step_message(step))
     assert "🪙 BTC" in text
     assert "⏸ HOLD" in text
-    assert "Обоснование: Сигналы противоречивые." in text
+    assert "Сигналы противоречивые." in text
     # HOLD не должен звать ни «Куплено», ни «Продано»
     assert "Куплено" not in text
     assert "Продано" not in text
@@ -97,13 +111,14 @@ def test_format_step_message_buy_success_has_balances_and_fraction() -> None:
         executed=True,
         transaction=tx,
     )
-    text = format_step_message(step)
+    text = _plain(format_step_message(step))
     assert "📈 BUY 25% свободного USDT" in text
-    assert "Цена: 67432.12 USDT (ask)" in text
+    assert "Цена: 67432.12 USDT" in text
+    assert "(ask)" in text
     assert "Куплено: 0.00371 BTC" in text
     # baseline до сделки = after + net (spend для BUY)
     assert "749.35 → 498.95" in text
-    assert "Обоснование: Сильный bullish сигнал." in text
+    assert "Сильный bullish сигнал." in text
 
 
 def test_format_step_message_sell_success_uses_bid_and_subtraction() -> None:
@@ -124,9 +139,10 @@ def test_format_step_message_sell_success_uses_bid_and_subtraction() -> None:
         executed=True,
         transaction=tx,
     )
-    text = format_step_message(step)
+    text = _plain(format_step_message(step))
     assert "📉 SELL (вся позиция)" in text
-    assert "Цена: 67100.00 USDT (bid)" in text
+    assert "Цена: 67100.00 USDT" in text
+    assert "(bid)" in text
     # baseline до SELL = after - net (receive)
     assert "664.84 → 1000.00" in text
 
@@ -141,17 +157,17 @@ def test_format_step_message_not_executed_shows_reason() -> None:
         not_executed_reason="MIN_NOTIONAL",
         transaction=None,
     )
-    text = format_step_message(step)
+    text = _plain(format_step_message(step))
     assert "📈 BUY 10% свободного USDT" in text
     assert "Не исполнено: MIN_NOTIONAL" in text
-    assert "Обоснование: Слишком маленькая позиция." in text
+    assert "Слишком маленькая позиция." in text
 
 
 def test_format_step_message_pipeline_failure_uses_warning_branch() -> None:
     step = make_failure_step(asset="BTC", error_text="step timeout after 300s")
-    text = format_step_message(step)
+    text = _plain(format_step_message(step))
     assert "🪙 BTC" in text
-    assert "⚠️ Шаг не завершён: STEP_TIMEOUT" in text
+    assert "Шаг не завершён: STEP_TIMEOUT" in text
     assert "step timeout after 300s" in text
 
 
@@ -184,10 +200,10 @@ def test_format_summary_message_counts_decisions_and_shows_portfolio() -> None:
     run = make_pipeline_run(steps)
     portfolio = PortfolioSnapshot(items=(), total_usdt=Decimal("1024.55"))
 
-    text = format_summary_message(
-        run, portfolio=portfolio, fx_rate=Decimal("100")
+    text = _plain(
+        format_summary_message(run, portfolio=portfolio, fx_rate=Decimal("100"))
     )
-    assert "Pipeline #" in text
+    assert "Pipeline" in text and "#" in text
     assert "BUY×1" in text and "SELL×0" in text and "HOLD×2" in text
     assert "С ошибками: 1 из 3" in text
     assert "Портфель: 1024.55 USDT" in text
@@ -201,7 +217,7 @@ def test_format_summary_message_without_portfolio_omits_portfolio_line() -> None
         make_step_result(asset="BTC", action=DecisionAction.HOLD, transaction=None),
     ]
     run = make_pipeline_run(steps)
-    text = format_summary_message(run, portfolio=None, fx_rate=None)
+    text = _plain(format_summary_message(run, portfolio=None, fx_rate=None))
     assert "Портфель" not in text
 
 
@@ -210,7 +226,7 @@ def test_format_summary_message_no_fx_rate_drops_rub_part() -> None:
     run = make_pipeline_run(
         [make_step_result(action=DecisionAction.HOLD, transaction=None)]
     )
-    text = format_summary_message(run, portfolio=portfolio, fx_rate=None)
+    text = _plain(format_summary_message(run, portfolio=portfolio, fx_rate=None))
     assert "Портфель: 500.00 USDT" in text
     assert "RUB" not in text
 
@@ -231,8 +247,10 @@ def test_format_summary_message_appends_pnl_line_when_report_passed() -> None:
         hold_baseline=HoldBaseline(per_asset_initial_usdt=Decimal("333")),
         delta_vs_hold_pct=Decimal("0.85"),
     )
-    text = format_summary_message(
-        run, portfolio=portfolio, fx_rate=None, pnl_report=report
+    text = _plain(
+        format_summary_message(
+            run, portfolio=portfolio, fx_rate=None, pnl_report=report
+        )
     )
     assert "PnL: +24.55 USDT (+2.46%) | vs HOLD: +0.85%" in text
 
@@ -266,7 +284,7 @@ def test_format_balance_message_shows_usdt_and_asset_values() -> None:
         ),
         total_usdt=Decimal("830.5"),
     )
-    text = format_balance_message(portfolio=portfolio, fx_rate=Decimal("100"))
+    text = _plain(format_balance_message(portfolio=portfolio, fx_rate=Decimal("100")))
     assert "USDT: 500.50" in text
     assert "BTC: 0.005" in text
     assert "по bid 66000.00" in text
@@ -404,7 +422,7 @@ async def test_telegram_notifier_sends_step_message(session_factory) -> None:
     assert len(bot.sent) == 1
     payload = bot.sent[0]
     assert payload["chat_id"] == 123
-    assert "📈 BUY" in payload["text"]
+    assert "📈 BUY" in _plain(payload["text"])
 
 
 @_asyncio_session

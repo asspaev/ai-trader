@@ -17,6 +17,7 @@ from typing import Final
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from loguru import logger
 
 from app.services.telegram.handlers import HandlerDeps, build_router
@@ -65,7 +66,13 @@ class TelegramBotRunner:
         """
         if not token:
             raise ValueError("Telegram bot token is empty; cannot build bot")
-        return Bot(token=token, default=DefaultBotProperties())
+        # HTML parse mode — все форматтеры notifier/handlers пишут
+        # сообщения как HTML и аккуратно экранируют пользовательский
+        # текст (обоснование LLM, error_text) через ``html.escape``.
+        return Bot(
+            token=token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
 
     @classmethod
     def build(

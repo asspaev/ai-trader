@@ -30,6 +30,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from html import escape as _html_escape
 from typing import Any
 
 from aiogram import BaseMiddleware, F, Router
@@ -133,14 +134,16 @@ class CommandHandlers:
     async def on_start(self, message: Message) -> None:
         """Приветствие + явное подтверждение авторизации."""
         await message.answer(
-            "👋 AI-Trader на связи. Доступные команды:\n"
-            "/balance — портфель в USDT и RUB\n"
-            "/history [N] — последние N сделок (по умолчанию "
-            f"{self._deps.history_limit_default})\n"
-            "/stats — сводка по решениям\n"
-            "/start_pipeline — принудительно запустить тик\n"
-            "/stop — поставить планировщик на паузу\n"
-            "/resume — возобновить планировщик"
+            "👋 <b>AI-Trader на связи</b>\n"
+            f"{_SEPARATOR}\n"
+            "<b>Доступные команды:</b>\n"
+            "• /balance — портфель в USDT и RUB\n"
+            "• /history [N] — последние сделки "
+            f"<i>(по умолчанию {self._deps.history_limit_default})</i>\n"
+            "• /stats — сводка по решениям\n"
+            "• /start_pipeline — принудительно запустить тик\n"
+            "• /stop — поставить планировщик на паузу\n"
+            "• /resume — возобновить планировщик"
         )
 
     # ----- /balance -----
@@ -165,7 +168,7 @@ class CommandHandlers:
             )
 
         if not txs:
-            await message.answer("История сделок пуста.")
+            await message.answer("📭 <i>История сделок пуста.</i>")
             return
 
         await message.answer(_format_history_message(txs, limit=limit))
@@ -210,7 +213,9 @@ class CommandHandlers:
         вернуть быстро. О результатах пользователь узнает из
         ``notify_step`` / ``notify_pipeline_summary``.
         """
-        await message.answer("🚀 Запускаю pipeline вне расписания…")
+        await message.answer(
+            "🚀 <b>Запускаю pipeline вне расписания…</b>"
+        )
 
         async def _run() -> None:
             try:
@@ -219,7 +224,8 @@ class CommandHandlers:
                 self._log.exception("Forced pipeline run failed")
                 try:
                     await message.answer(
-                        f"⚠️ Pipeline упал: {type(exc).__name__}: {exc}"
+                        "⚠️ <b>Pipeline упал:</b> "
+                        f"<code>{_esc(type(exc).__name__)}: {_esc(exc)}</code>"
                     )
                 except Exception:  # noqa: BLE001
                     pass
@@ -231,14 +237,15 @@ class CommandHandlers:
     async def on_stop(self, message: Message) -> None:
         await self._deps.scheduler.pause()
         await message.answer(
-            "⏸ Pipeline на паузе. /resume чтобы возобновить."
+            "⏸ <b>Pipeline на паузе.</b>\n"
+            "<i>Используйте /resume чтобы возобновить.</i>"
         )
 
     # ----- /resume -----
 
     async def on_resume(self, message: Message) -> None:
         await self._deps.scheduler.resume()
-        await message.answer("▶️ Pipeline возобновлён.")
+        await message.answer("▶️ <b>Pipeline возобновлён.</b>")
 
     # ----- внутреннее -----
 
@@ -336,7 +343,8 @@ def build_router(deps: HandlerDeps) -> Router:
     @router.message(F.text)
     async def _fallback(message: Message) -> None:  # pragma: no cover — тривиально
         await message.answer(
-            "Не понял команду. Доступно: /balance, /history, /stats, "
+            "🤔 <i>Не понял команду.</i>\n"
+            "<b>Доступно:</b> /balance, /history, /stats, "
             "/start_pipeline, /stop, /resume."
         )
 
@@ -345,21 +353,43 @@ def build_router(deps: HandlerDeps) -> Router:
 
 # ---------- helpers (форматирование сообщений) ----------
 
+_SEPARATOR = "━━━━━━━━━━━━━━━"
+
+
+def _esc(value: object) -> str:
+    """Экранировать произвольный текст для HTML parse mode Telegram.
+
+    Безопасно вызывать на любом значении — числа, ``None`` и Enum'ы
+    приводятся к строке, у строк экранируются ``<`` / ``>`` / ``&``.
+    """
+    if value is None:
+        return ""
+    return _html_escape(str(value), quote=True)
+
 
 def _format_history_message(
     transactions: list[Transaction], *, limit: int
 ) -> str:
-    """Текст ответа на ``/history``."""
-    lines: list[str] = [f"📜 Последние {len(transactions)} сделок (≤ {limit}):"]
+    """Текст ответа на ``/history`` (HTML)."""
+    lines: list[str] = [
+        f"📜 <b>Последние {len(transactions)} сделок</b> "
+        f"<i>(≤ {limit})</i>",
+        _SEPARATOR,
+    ]
     for tx in transactions:
-        emoji = "📈" if tx.action is TransactionAction.BUY else "📉"
+        emoji = "🟢" if tx.action is TransactionAction.BUY else "🔴"
         verb = "куплено" if tx.action is TransactionAction.BUY else "продано"
         lines.append(
-            f"{emoji} {_fmt_timestamp(tx.created_at)} — {tx.asset}: "
-            f"{verb} {_fmt_qty(tx.amount_crypto)} по "
-            f"{_fmt_price(tx.price_usdt)} USDT "
-            f"(нетто {_fmt_money(tx.net_usdt)} USDT, "
-            f"комиссия {_fmt_money(tx.fee_usdt)} USDT)"
+            f"{emoji} <code>{_esc(_fmt_timestamp(tx.created_at))}</code> — "
+            f"<b>{_esc(tx.asset)}</b>"
+        )
+        lines.append(
+            f"    {verb} <code>{_fmt_qty(tx.amount_crypto)}</code> "
+            f"по <code>{_fmt_price(tx.price_usdt)}</code> USDT"
+        )
+        lines.append(
+            f"    <i>нетто <code>{_fmt_money(tx.net_usdt)}</code> USDT, "
+            f"комиссия <code>{_fmt_money(tx.fee_usdt)}</code> USDT</i>"
         )
     return "\n".join(lines)
 
@@ -372,7 +402,7 @@ def _format_stats_message(
     fx_rate: Decimal | None,
     pnl_report: PnLReport | None,
 ) -> str:
-    """Текст ответа на ``/stats``."""
+    """Текст ответа на ``/stats`` (HTML)."""
     counts: dict[DecisionAction, int] = {a: 0 for a in DecisionAction}
     executed = 0
     skipped = 0
@@ -388,21 +418,31 @@ def _format_stats_message(
     fees = sum((tx.fee_usdt for tx in transactions), Decimal("0"))
 
     rub_value = portfolio.total_rub(fx_rate)
-    rub_part = f" (≈ {_fmt_rub(rub_value)} RUB)" if rub_value is not None else ""
+    rub_part = (
+        f" <i>(≈ <code>{_fmt_rub(rub_value)}</code> RUB)</i>"
+        if rub_value is not None
+        else ""
+    )
 
     lines = [
-        "📊 Статистика",
-        f"Решений всего: {len(decisions)} "
-        f"(BUY×{counts[DecisionAction.BUY]}, "
-        f"SELL×{counts[DecisionAction.SELL]}, "
-        f"HOLD×{counts[DecisionAction.HOLD]})",
-        f"Из них исполнено: {executed}, пропущено: {skipped}",
-        f"Сделок: {len(transactions)} (BUY×{buys}, SELL×{sells}); "
-        f"комиссии всего {_fmt_money(fees)} USDT",
-        f"Портфель: {_fmt_money(portfolio.total_usdt)} USDT{rub_part}",
+        "📊 <b>Статистика</b>",
+        _SEPARATOR,
+        f"🧠 Решений всего: <b>{len(decisions)}</b>",
+        f"    BUY×<b>{counts[DecisionAction.BUY]}</b> · "
+        f"SELL×<b>{counts[DecisionAction.SELL]}</b> · "
+        f"HOLD×<b>{counts[DecisionAction.HOLD]}</b>",
+        f"    <i>исполнено: {executed}, пропущено: {skipped}</i>",
+        f"💱 Сделок: <b>{len(transactions)}</b> "
+        f"(BUY×<b>{buys}</b> · SELL×<b>{sells}</b>)",
+        f"    <i>комиссии всего: <code>{_fmt_money(fees)}</code> USDT</i>",
+        _SEPARATOR,
+        f"💼 Портфель: <b><code>{_fmt_money(portfolio.total_usdt)}</code> "
+        f"USDT</b>{rub_part}",
     ]
     if pnl_report is not None:
-        lines.extend(format_pnl_lines(pnl_report))
+        lines.append(_SEPARATOR)
+        for pnl_line in format_pnl_lines(pnl_report):
+            lines.append(f"📈 <b>{_esc(pnl_line)}</b>")
     return "\n".join(lines)
 
 

@@ -15,11 +15,13 @@
 ``app/services/pipeline/notifier.py`` — иначе pipeline-runner получил
 бы зависимость от Telegram-пакета (а через него — от ``aiogram``).
 
-Все сообщения шлются plain-text (без ``parse_mode``): обоснование
-TRADER-агента — произвольный пользовательский текст, экранировать
-Markdown/HTML на каждый чих не хочется, а эмодзи прекрасно работают и
-так. Падения отправки сообщений никогда не валят pipeline — все ошибки
-``aiogram`` логируются и подавляются.
+Сообщения шлются как HTML (``parse_mode=HTML`` выставлен по умолчанию
+в :meth:`TelegramBotRunner.make_bot`): заголовки в ``<b>``, числа и
+тикеры — в ``<code>``, обоснование TRADER-агента — в ``<blockquote>``.
+Любой пользовательский / LLM-текст экранируется через :func:`_esc`,
+поэтому случайные ``<`` / ``>`` / ``&`` в reasoning или error_text не
+ломают разметку. Падения отправки сообщений никогда не валят pipeline
+— все ошибки ``aiogram`` логируются и подавляются.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from html import escape as _html_escape
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -55,6 +58,21 @@ _ACTION_EMOJI: dict[DecisionAction, str] = {
     DecisionAction.SELL: "📉",
     DecisionAction.HOLD: "⏸",
 }
+
+_SEPARATOR = "━━━━━━━━━━━━━━━"
+
+
+def _esc(value: object) -> str:
+    """Экранировать произвольный текст для HTML parse mode Telegram.
+
+    Безопасно вызывать на любом значении — числа, ``None`` и Enum'ы
+    приводятся к строке, у строк экранируются ``<`` / ``>`` / ``&``.
+    Кавычки тоже экранируем (``quote=True``) — на случай вставки
+    текста в значения атрибутов в будущем.
+    """
+    if value is None:
+        return ""
+    return _html_escape(str(value), quote=True)
 
 
 # ---------- Portfolio snapshot ----------
@@ -189,7 +207,7 @@ async def build_portfolio_snapshot(
 
 
 def format_step_message(result: CryptoStepResult) -> str:
-    """Собрать plain-text сообщение по итогу одной монеты.
+    """Собрать HTML-сообщение по итогу одной монеты.
 
     Поддерживаются три ветки:
 
@@ -201,42 +219,48 @@ def format_step_message(result: CryptoStepResult) -> str:
       HOLD/BUY/SELL с балансами «было → стало».
     """
     asset = result.asset.upper()
-    lines: list[str] = [f"🪙 {asset}"]
+    lines: list[str] = [f"🪙 <b>{_esc(asset)}</b>"]
 
     if result.execution is None:
-        lines.append(
-            f"⚠️ Шаг не завершён: {result.failure_reason or 'UNKNOWN'}"
-        )
+        reason = result.failure_reason or "UNKNOWN"
+        lines.append(f"⚠️ <b>Шаг не завершён:</b> <code>{_esc(reason)}</code>")
         if result.error_text:
-            lines.append(result.error_text)
-        lines.append(f"Длительность: {_format_duration(result.duration_seconds)}")
+            lines.append(f"<i>{_esc(result.error_text)}</i>")
+        lines.append(
+            f"⏱ Длительность: {_esc(_format_duration(result.duration_seconds))}"
+        )
         return "\n".join(lines)
 
     decision = result.decision
     emoji = _ACTION_EMOJI.get(decision.action, "•")
     action_text = _format_decision_headline(decision.action, decision.buy_fraction)
-    lines.append(f"Решение: {emoji} {action_text}")
+    lines.append(f"Решение: {emoji} <b>{_esc(action_text)}</b>")
 
     if not result.execution.executed:
         reason = result.execution.not_executed_reason or "UNKNOWN"
-        lines.append(f"Не исполнено: {reason}")
+        lines.append(f"⚠️ <b>Не исполнено:</b> <code>{_esc(reason)}</code>")
         _append_reasoning(lines, decision.reasoning)
         return "\n".join(lines)
 
     tx = result.execution.transaction
     if tx is not None:
         side = "ask" if tx.action is TransactionAction.BUY else "bid"
-        lines.append(f"Цена: {_fmt_price(tx.price_usdt)} USDT ({side})")
+        lines.append(
+            f"💲 Цена: <code>{_fmt_price(tx.price_usdt)}</code> USDT "
+            f"<i>({side})</i>"
+        )
         verb = "Куплено" if tx.action is TransactionAction.BUY else "Продано"
         lines.append(
-            f"{verb}: {_fmt_qty(tx.amount_crypto)} {asset} "
-            f"за {_fmt_money(tx.gross_usdt)} USDT "
-            f"(комиссия {_fmt_money(tx.fee_usdt)} USDT)"
+            f"{'🟢' if tx.action is TransactionAction.BUY else '🔴'} "
+            f"{verb}: <code>{_fmt_qty(tx.amount_crypto)}</code> "
+            f"<b>{_esc(asset)}</b> "
+            f"за <code>{_fmt_money(tx.gross_usdt)}</code> USDT "
+            f"<i>(комиссия <code>{_fmt_money(tx.fee_usdt)}</code> USDT)</i>"
         )
         usdt_before = _balance_before(tx)
         lines.append(
-            f"Баланс USDT: {_fmt_money(usdt_before)} → "
-            f"{_fmt_money(tx.usdt_balance_after)}"
+            f"💰 Баланс USDT: <code>{_fmt_money(usdt_before)}</code> → "
+            f"<code>{_fmt_money(tx.usdt_balance_after)}</code>"
         )
 
     _append_reasoning(lines, decision.reasoning)
@@ -250,7 +274,7 @@ def format_summary_message(
     fx_rate: Decimal | None,
     pnl_report: "PnLReport | None" = None,
 ) -> str:
-    """Собрать plain-text итоговое сообщение по тику.
+    """Собрать HTML итоговое сообщение по тику.
 
     PnL и ``delta_vs_hold_pct`` (фаза 10, см. ``architecture.md`` §13)
     добавляются отдельной строкой в формате
@@ -262,14 +286,16 @@ def format_summary_message(
     from app.services.metrics.pnl import format_pnl_inline
 
     counts = _count_decisions(run)
+    run_short = str(run.pipeline_run_id)[:8]
+    decisions_breakdown = " · ".join(
+        f"{action.value}×<b>{counts[action]}</b>"
+        for action in (DecisionAction.BUY, DecisionAction.SELL, DecisionAction.HOLD)
+    )
     lines: list[str] = [
-        f"🔁 Pipeline #{str(run.pipeline_run_id)[:8]} завершён "
-        f"за {_format_duration(run.duration_seconds)}",
-        "Решений: "
-        + ", ".join(
-            f"{action.value}×{counts[action]}"
-            for action in (DecisionAction.BUY, DecisionAction.SELL, DecisionAction.HOLD)
-        ),
+        f"🔁 <b>Pipeline</b> <code>#{_esc(run_short)}</code>",
+        f"⏱ Завершён за {_esc(_format_duration(run.duration_seconds))}",
+        _SEPARATOR,
+        f"Решения: {decisions_breakdown}",
     ]
     skipped = sum(
         1
@@ -277,21 +303,37 @@ def format_summary_message(
         if step.failure_reason is not None
     )
     if skipped:
-        lines.append(f"С ошибками: {skipped} из {len(run.steps)}")
+        lines.append(
+            f"⚠️ С ошибками: <b>{skipped}</b> из {len(run.steps)}"
+        )
 
     if portfolio is not None:
         rub_value = portfolio.total_rub(fx_rate)
         rub_part = (
-            f" (≈ {_fmt_rub(rub_value)} RUB)" if rub_value is not None else ""
+            f" <i>(≈ <code>{_fmt_rub(rub_value)}</code> RUB)</i>"
+            if rub_value is not None
+            else ""
         )
         lines.append(
-            f"Портфель: {_fmt_money(portfolio.total_usdt)} USDT{rub_part}"
+            f"💼 Портфель: <b><code>{_fmt_money(portfolio.total_usdt)}</code> "
+            f"USDT</b>{rub_part}"
         )
 
     if pnl_report is not None:
-        lines.append(format_pnl_inline(pnl_report))
+        lines.append(_SEPARATOR)
+        lines.append(_format_pnl_html(format_pnl_inline(pnl_report)))
 
     return "\n".join(lines)
+
+
+def _format_pnl_html(inline_text: str) -> str:
+    """Сделать строку PnL «жирной» в HTML, не теряя экранирование.
+
+    ``format_pnl_inline`` уже возвращает безопасный ASCII-текст
+    (``PnL: +24.55 USDT (+2.46%) | vs HOLD: +0.85%``), но на всякий
+    случай прогоняем через :func:`_esc`.
+    """
+    return f"📊 <b>{_esc(inline_text)}</b>"
 
 
 def format_balance_message(
@@ -299,24 +341,37 @@ def format_balance_message(
     portfolio: PortfolioSnapshot,
     fx_rate: Decimal | None,
 ) -> str:
-    """Текст ответа на команду ``/balance`` (см. handlers.py)."""
-    lines: list[str] = ["💼 Баланс"]
+    """Текст ответа на команду ``/balance`` (HTML, см. handlers.py)."""
+    lines: list[str] = ["💼 <b>Баланс</b>", _SEPARATOR]
     for item in portfolio.items:
+        asset_label = f"<b>{_esc(item.asset)}</b>"
         if item.asset == "USDT":
-            lines.append(f"• {item.asset}: {_fmt_money(item.balance)}")
+            lines.append(
+                f"💵 {asset_label}: <code>{_fmt_money(item.balance)}</code>"
+            )
             continue
         if item.bid_price is None or item.balance <= 0:
-            lines.append(f"• {item.asset}: {_fmt_qty(item.balance)}")
+            lines.append(
+                f"🪙 {asset_label}: <code>{_fmt_qty(item.balance)}</code>"
+            )
         else:
             lines.append(
-                f"• {item.asset}: {_fmt_qty(item.balance)} "
-                f"(≈ {_fmt_money(item.value_usdt)} USDT "
-                f"по bid {_fmt_price(item.bid_price)})"
+                f"🪙 {asset_label}: <code>{_fmt_qty(item.balance)}</code> "
+                f"<i>(≈ <code>{_fmt_money(item.value_usdt)}</code> USDT "
+                f"по bid <code>{_fmt_price(item.bid_price)}</code>)</i>"
             )
 
     rub_value = portfolio.total_rub(fx_rate)
-    rub_part = f" (≈ {_fmt_rub(rub_value)} RUB)" if rub_value is not None else ""
-    lines.append(f"Всего: {_fmt_money(portfolio.total_usdt)} USDT{rub_part}")
+    rub_part = (
+        f" <i>(≈ <code>{_fmt_rub(rub_value)}</code> RUB)</i>"
+        if rub_value is not None
+        else ""
+    )
+    lines.append(_SEPARATOR)
+    lines.append(
+        f"<b>Всего:</b> <code>{_fmt_money(portfolio.total_usdt)}</code> "
+        f"USDT{rub_part}"
+    )
     return "\n".join(lines)
 
 
@@ -457,9 +512,13 @@ def _format_decision_headline(
 
 
 def _append_reasoning(lines: list[str], reasoning: str | None) -> None:
-    """Дописать обоснование TRADER (если оно есть)."""
-    if reasoning:
-        lines.append(f"Обоснование: {reasoning}")
+    """Дописать обоснование TRADER (если оно есть) как HTML-blockquote."""
+    if not reasoning:
+        return
+    # Telegram поддерживает <blockquote> для свёрнутого/отступного блока.
+    # Экранируем обязательно: reasoning — произвольный текст LLM,
+    # может содержать ``<`` / ``>`` / ``&``.
+    lines.append(f"💭 <blockquote>{_esc(reasoning)}</blockquote>")
 
 
 def _balance_before(tx) -> Decimal:

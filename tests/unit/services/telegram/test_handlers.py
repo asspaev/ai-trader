@@ -19,9 +19,17 @@ Handlers тестируются напрямую (минуя aiogram-Dispatcher)
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from decimal import Decimal
 from typing import Any
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain(text: str) -> str:
+    """Снять HTML-теги: handlers пишут ответы в HTML parse mode."""
+    return _HTML_TAG_RE.sub("", text)
 
 import pytest
 import pytest_asyncio
@@ -215,7 +223,7 @@ async def test_balance_command_lists_wallets_and_rub_equivalent(
     await handlers.on_balance(msg)
 
     assert len(msg.replies) == 1
-    text = msg.replies[0]
+    text = _plain(msg.replies[0])
     assert "USDT: 500.00" in text
     assert "BTC: 0.01" in text
     # 500 + 0.01 * 60000 = 1100 USDT, mid-rate USDT/RUB = 100 → 110 000 RUB
@@ -240,7 +248,8 @@ async def test_history_command_returns_empty_when_no_transactions(
         args: str | None = None
 
     await handlers.on_history(msg, _FakeCmd())  # type: ignore[arg-type]
-    assert msg.replies == ["История сделок пуста."]
+    assert len(msg.replies) == 1
+    assert "История сделок пуста." in _plain(msg.replies[0])
 
 
 async def test_history_command_parses_n_and_caps_to_max(
@@ -279,18 +288,18 @@ async def test_history_command_parses_n_and_caps_to_max(
 
     msg_default = FakeMessage(text="/history", from_user_id=ALLOWED_TELEGRAM_ID)
     await handlers.on_history(msg_default, _FakeCmd(None))  # type: ignore[arg-type]
-    assert "Последние 3 сделок" in msg_default.replies[0]
-    assert "≤ 10" in msg_default.replies[0]
+    assert "Последние 3 сделок" in _plain(msg_default.replies[0])
+    assert "≤ 10" in _plain(msg_default.replies[0])
 
     msg_capped = FakeMessage(text="/history 999", from_user_id=ALLOWED_TELEGRAM_ID)
     await handlers.on_history(msg_capped, _FakeCmd("999"))  # type: ignore[arg-type]
     # max=5, поэтому в шапке ≤ 5; реально вернётся min(5, 3) = 3 сделки
-    assert "≤ 5" in msg_capped.replies[0]
+    assert "≤ 5" in _plain(msg_capped.replies[0])
 
     msg_garbage = FakeMessage(text="/history foo", from_user_id=ALLOWED_TELEGRAM_ID)
     await handlers.on_history(msg_garbage, _FakeCmd("foo"))  # type: ignore[arg-type]
     # «foo» — не число → дефолтный лимит
-    assert "≤ 10" in msg_garbage.replies[0]
+    assert "≤ 10" in _plain(msg_garbage.replies[0])
 
 
 # ---------- /stats ----------
@@ -352,7 +361,7 @@ async def test_stats_command_counts_decisions_and_transactions(
     msg = FakeMessage(text="/stats", from_user_id=ALLOWED_TELEGRAM_ID)
     await handlers.on_stats(msg)
 
-    text = msg.replies[0]
+    text = _plain(msg.replies[0])
     assert "Решений всего: 3" in text
     assert "BUY×2" in text
     assert "SELL×0" in text
