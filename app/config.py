@@ -5,16 +5,17 @@
 ``settings``). При добавлении новых групп — синхронно обновлять
 ``.env.example``.
 
-В фазе 0 определены только группы ``Database`` и ``Logging``; остальные
-группы (Binance, OpenRouter, AgentModels, CryptoPanic, Telegram,
-Scheduler, Trading) добавляются в последующих фазах.
+На текущей фазе подключены группы: Database, Logging, AgentModels,
+Binance, Trading. Остальные (OpenRouter, CryptoPanic, Telegram,
+Scheduler) добавляются в последующих фазах.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import cached_property
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,6 +92,58 @@ class AgentModelsSettings(BaseSettings):
     embedding_dim: int = 1536
 
 
+class BinanceSettings(BaseSettings):
+    """Параметры подключения к Binance public API.
+
+    Используется только публичный API (без ключей). ``taker_fee``
+    моделирует Binance Spot taker-комиссию без BNB-скидки.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="BINANCE_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    base_url: str = "https://api.binance.com"
+    taker_fee: Decimal = Decimal("0.001")
+    timeout_seconds: float = 10.0
+    max_retries: int = 3
+    retry_backoff_base: float = 1.0
+
+
+class TradingSettings(BaseSettings):
+    """Параметры торговой стратегии (символы, стартовый капитал, лимиты)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="TRADING_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    initial_capital_rub: Decimal = Decimal("100000")
+    symbols: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "TON"])
+    quote_asset: str = "USDT"
+    decisions_history_limit: int = 12
+    rag_top_k: int = 5
+    rag_exclude_last_hours: int = 24
+    pipeline_step_timeout_seconds: int = 300
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def _split_symbols(cls, value: object) -> object:
+        """Принять либо список, либо CSV-строку из ENV."""
+        if isinstance(value, str):
+            return [item.strip().upper() for item in value.split(",") if item.strip()]
+        return value
+
+    def pair(self, asset: str) -> str:
+        """Полный тикер пары: ``BTC`` → ``BTCUSDT``."""
+        return f"{asset.upper()}{self.quote_asset}"
+
+
 class Settings:
     """Композитный контейнер всех групп настроек."""
 
@@ -98,6 +151,8 @@ class Settings:
         self.db = DatabaseSettings()
         self.logging = LoggingSettings()
         self.agent = AgentModelsSettings()
+        self.binance = BinanceSettings()
+        self.trading = TradingSettings()
 
 
 settings = Settings()
