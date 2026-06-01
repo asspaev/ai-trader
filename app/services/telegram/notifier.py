@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -40,6 +41,13 @@ from app.services.fx import FxRate, FxRateError, fetch_usdt_rub_rate
 from app.services.pipeline.crypto_step import CryptoStepResult
 from app.services.pipeline.notifier import NoOpNotifier, PipelineNotifier
 from app.services.pipeline.runner import PipelineRunResult
+
+if TYPE_CHECKING:
+    # Импорт под TYPE_CHECKING: модуль ``metrics.pnl`` сам импортирует
+    # ``PortfolioSnapshot`` из этого файла — runtime-импорт сюда
+    # породил бы цикл. PnLReport нужен только в аннотациях, поэтому
+    # этого достаточно.
+    from app.services.metrics.pnl import PnLReport
 
 
 _ACTION_EMOJI: dict[DecisionAction, str] = {
@@ -240,12 +248,19 @@ def format_summary_message(
     *,
     portfolio: PortfolioSnapshot | None,
     fx_rate: Decimal | None,
+    pnl_report: "PnLReport | None" = None,
 ) -> str:
     """Собрать plain-text итоговое сообщение по тику.
 
-    PnL и delta_vs_hold добавятся в фазе 10 (см. ``architecture.md`` §13)
-    — для Phase 9 достаточно сводки по решениям и оценки портфеля.
+    PnL и ``delta_vs_hold_pct`` (фаза 10, см. ``architecture.md`` §13)
+    добавляются отдельной строкой в формате
+    ``PnL: +24.55 USDT (+2.46%) | vs HOLD: +0.85%``. Если
+    ``pnl_report`` не передан — строка PnL не выводится.
     """
+    # Поздний импорт, чтобы избежать цикла telegram.notifier ↔
+    # metrics.pnl (pnl.py импортирует PortfolioSnapshot отсюда).
+    from app.services.metrics.pnl import format_pnl_inline
+
     counts = _count_decisions(run)
     lines: list[str] = [
         f"🔁 Pipeline #{str(run.pipeline_run_id)[:8]} завершён "
@@ -272,6 +287,9 @@ def format_summary_message(
         lines.append(
             f"Портфель: {_fmt_money(portfolio.total_usdt)} USDT{rub_part}"
         )
+
+    if pnl_report is not None:
+        lines.append(format_pnl_inline(pnl_report))
 
     return "\n".join(lines)
 
@@ -340,9 +358,13 @@ class TelegramNotifier:
         await self._safe_send(text, context="step")
 
     async def notify_pipeline_summary(self, run: PipelineRunResult) -> None:
-        """Отправить итоговое сообщение тика (портфель + сводка решений)."""
+        """Отправить итоговое сообщение тика (портфель + PnL + сводка)."""
+        # Поздний импорт во избежание цикла telegram.notifier ↔ metrics.pnl.
+        from app.services.metrics.pnl import PnLReport, compute_pnl
+
         portfolio: PortfolioSnapshot | None = None
         fx_rate: Decimal | None = None
+        pnl_report: PnLReport | None = None
         try:
             portfolio = await build_portfolio_snapshot(
                 session_factory=self._session_factory,
@@ -369,7 +391,25 @@ class TelegramNotifier:
                 err=f"{type(exc).__name__}: {exc}",
             )
 
-        text = format_summary_message(run, portfolio=portfolio, fx_rate=fx_rate)
+        if portfolio is not None:
+            try:
+                pnl_report = await compute_pnl(
+                    session_factory=self._session_factory,
+                    binance_client=self._binance_client,
+                    user_id=self._user_id,
+                    quote_asset=self._quote_asset,
+                    symbols=self._symbols,
+                    portfolio=portfolio,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.warning(
+                    "Failed to compute PnL for summary: {err}",
+                    err=f"{type(exc).__name__}: {exc}",
+                )
+
+        text = format_summary_message(
+            run, portfolio=portfolio, fx_rate=fx_rate, pnl_report=pnl_report
+        )
         await self._safe_send(text, context="summary")
 
     async def _safe_send(self, text: str, *, context: str) -> None:

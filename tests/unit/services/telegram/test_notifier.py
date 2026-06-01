@@ -215,6 +215,28 @@ def test_format_summary_message_no_fx_rate_drops_rub_part() -> None:
     assert "RUB" not in text
 
 
+def test_format_summary_message_appends_pnl_line_when_report_passed() -> None:
+    """Если передали ``pnl_report`` — добавляется одна строка с PnL и vs HOLD."""
+    from app.services.metrics.pnl import HoldBaseline, PnLReport
+
+    portfolio = PortfolioSnapshot(items=(), total_usdt=Decimal("1024.55"))
+    run = make_pipeline_run(
+        [make_step_result(action=DecisionAction.HOLD, transaction=None)]
+    )
+    report = PnLReport(
+        initial_capital_usdt=Decimal("1000"),
+        portfolio_value_usdt=Decimal("1024.55"),
+        pnl_usdt=Decimal("24.55"),
+        pnl_pct=Decimal("2.46"),
+        hold_baseline=HoldBaseline(per_asset_initial_usdt=Decimal("333")),
+        delta_vs_hold_pct=Decimal("0.85"),
+    )
+    text = format_summary_message(
+        run, portfolio=portfolio, fx_rate=None, pnl_report=report
+    )
+    assert "PnL: +24.55 USDT (+2.46%) | vs HOLD: +0.85%" in text
+
+
 # ---------- format_balance_message ----------
 
 

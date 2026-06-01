@@ -1,4 +1,4 @@
-"""Команды Telegram-бота (фаза 9).
+"""Команды Telegram-бота (фаза 9 + 10).
 
 Команды (только для авторизованного ``telegram_id`` из таблицы
 ``users``):
@@ -7,9 +7,8 @@
 * ``/balance`` — балансы кошельков + общая стоимость портфеля в USDT и RUB.
 * ``/history [N]`` — последние N (default 10, max настраивается через
   ``TELEGRAM_HISTORY_LIMIT_MAX``) фактических сделок.
-* ``/stats`` — компактная статистика: число решений по типам, число
-  сделок, текущая стоимость портфеля. PnL и ``delta_vs_hold_pct``
-  добавятся в фазе 10 (см. ``services/metrics/pnl.py``).
+* ``/stats`` — счётчики решений и сделок, текущая стоимость портфеля,
+  PnL и ``delta_vs_hold_pct`` (см. ``services/metrics/pnl.py``).
 * ``/start_pipeline`` — форс-запуск тика вне расписания (через
   :meth:`PipelineScheduler.trigger_now`).
 * ``/stop`` / ``/resume`` — переключение флага ``scheduler_state.paused``.
@@ -45,6 +44,11 @@ from app.models import Decision, Transaction
 from app.models.enums import DecisionAction, TransactionAction
 from app.services.binance.client import BinanceClient
 from app.services.fx import FxRate, FxRateError, fetch_usdt_rub_rate
+from app.services.metrics.pnl import (
+    PnLReport,
+    compute_pnl,
+    format_pnl_lines,
+)
 from app.services.pipeline.scheduler import PipelineScheduler
 from app.services.telegram.notifier import (
     PortfolioSnapshot,
@@ -169,10 +173,12 @@ class CommandHandlers:
     # ----- /stats -----
 
     async def on_stats(self, message: Message) -> None:
-        """Сводка: счётчики решений + сделок + стоимость портфеля.
+        """Сводка: счётчики решений + сделок + портфель + PnL.
 
-        PnL и ``delta_vs_hold_pct`` появятся в фазе 10 — здесь только
-        дешёвые агрегации, считаемые из существующих таблиц.
+        PnL и ``delta_vs_hold_pct`` (фаза 10) считаются по запросу.
+        Если посчитать не удалось (например, Binance не отдал
+        исторические цены), строка про PnL опускается — остальная
+        статистика приходит к пользователю в любом случае.
         """
         async with self._deps.session_factory() as session:
             decisions = await decision_crud.list_all_for_user(
@@ -184,11 +190,13 @@ class CommandHandlers:
 
         portfolio = await self._build_portfolio()
         fx_rate = await self._fetch_fx_rate_or_none()
+        pnl_report = await self._compute_pnl_or_none(portfolio)
         text = _format_stats_message(
             decisions=decisions,
             transactions=transactions,
             portfolio=portfolio,
             fx_rate=fx_rate,
+            pnl_report=pnl_report,
         )
         await message.answer(text)
 
@@ -276,6 +284,30 @@ class CommandHandlers:
             )
         return None
 
+    async def _compute_pnl_or_none(
+        self, portfolio: PortfolioSnapshot
+    ) -> PnLReport | None:
+        """Посчитать PnL или вернуть ``None`` при ошибке.
+
+        В команде ``/stats`` падать из-за метрики не хочется: остальная
+        сводка (решения, сделки, портфель) и так информативна.
+        """
+        try:
+            return await compute_pnl(
+                session_factory=self._deps.session_factory,
+                binance_client=self._deps.binance_client,
+                user_id=self._deps.user_id,
+                quote_asset=self._deps.quote_asset,
+                symbols=self._deps.symbols,
+                portfolio=portfolio,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.warning(
+                "Failed to compute PnL for /stats: {err}",
+                err=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+
 
 # ---------- Router builder ----------
 
@@ -338,6 +370,7 @@ def _format_stats_message(
     transactions: list[Transaction],
     portfolio: PortfolioSnapshot,
     fx_rate: Decimal | None,
+    pnl_report: PnLReport | None,
 ) -> str:
     """Текст ответа на ``/stats``."""
     counts: dict[DecisionAction, int] = {a: 0 for a in DecisionAction}
@@ -367,8 +400,9 @@ def _format_stats_message(
         f"Сделок: {len(transactions)} (BUY×{buys}, SELL×{sells}); "
         f"комиссии всего {_fmt_money(fees)} USDT",
         f"Портфель: {_fmt_money(portfolio.total_usdt)} USDT{rub_part}",
-        "PnL и delta vs hold будут доступны в следующей фазе.",
     ]
+    if pnl_report is not None:
+        lines.extend(format_pnl_lines(pnl_report))
     return "\n".join(lines)
 
 
