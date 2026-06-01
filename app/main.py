@@ -11,7 +11,7 @@
 2. Достаём из БД одного init-пользователя; если его нет — сразу
    завершаем процесс с понятной диагностикой (надо сначала запустить
    ``scripts/init_user.py``).
-3. Поднимаем долгоживущие клиенты: Binance, CryptoPanic, OpenRouter,
+3. Поднимаем долгоживущие клиенты: Binance, CoinDesk Data, OpenRouter,
    загружаем кэш ``exchangeInfo``.
 4. Собираем :class:`PipelineContext`, ``aiogram.Bot`` (если задан токен),
    :class:`TelegramNotifier`, :class:`PipelineScheduler` и
@@ -46,7 +46,7 @@ from app.services.binance.exchange_info import (
     load_exchange_info,
 )
 from app.services.llm.openrouter import OpenRouterClient
-from app.services.news.cryptopanic import CryptoPanicClient
+from app.services.news.coindesk import CoinDeskNewsClient
 from app.services.pipeline.crypto_step import PipelineContext
 from app.services.pipeline.notifier import NoOpNotifier, PipelineNotifier
 from app.services.pipeline.runner import run_pipeline_once
@@ -76,7 +76,7 @@ async def _run() -> None:
     )
 
     async with BinanceClient() as binance_client, \
-            CryptoPanicClient() as cryptopanic_client, \
+            CoinDeskNewsClient() as news_client, \
             OpenRouterClient() as openrouter_client:
         symbols = tuple(s.upper() for s in settings.trading.symbols)
         quote_asset = settings.trading.quote_asset
@@ -88,7 +88,7 @@ async def _run() -> None:
         context = PipelineContext.build(
             user_id=user.id,
             binance_client=binance_client,
-            cryptopanic_client=cryptopanic_client,
+            news_client=news_client,
             openrouter_client=openrouter_client,
             exchange_info=exchange_info,
             session_factory=SessionLocal,

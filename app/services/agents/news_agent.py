@@ -30,7 +30,7 @@ from app.services.agents.base import (
     parse_strict_json,
     render_prompt,
 )
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 
 
 AGENT_NAMES = {

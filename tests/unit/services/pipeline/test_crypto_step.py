@@ -45,7 +45,7 @@ from app.services.pipeline.crypto_step import (
 from tests.unit.services.llm._helpers import FakeOpenRouterClient
 from tests.unit.services.pipeline._helpers import (
     FakeBinanceClient,
-    FakeCryptoPanicClient,
+    FakeNewsClient,
     embedding_response,
     klines_for_all_timeframes,
     make_book_ticker,
@@ -110,7 +110,7 @@ def _build_context(
     *,
     user_id: int,
     binance: FakeBinanceClient,
-    cryptopanic: FakeCryptoPanicClient,
+    news_client: FakeNewsClient,
     openrouter: FakeOpenRouterClient,
     session_factory: async_sessionmaker,
     step_timeout_seconds: int = 30,
@@ -119,7 +119,7 @@ def _build_context(
     return PipelineContext(
         user_id=user_id,
         binance_client=binance,  # type: ignore[arg-type]
-        cryptopanic_client=cryptopanic,  # type: ignore[arg-type]
+        news_client=news_client,  # type: ignore[arg-type]
         openrouter_client=openrouter,
         exchange_info=make_exchange_info([SYMBOL]),
         session_factory=session_factory,
@@ -151,7 +151,7 @@ async def test_crypto_step_buy_creates_decision_and_transaction(
     """Happy path: 1 новая новость → BUY 25%; всё пишется в одной транзакции."""
     user_id = await _seed_user(session, usdt="1000")
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": [make_news_post(external_id="cp-1")]})
+    news_client = FakeNewsClient({"BTC": [make_news_post(external_id="cd-1")]})
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -170,7 +170,7 @@ async def test_crypto_step_buy_creates_decision_and_transaction(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -231,7 +231,7 @@ async def test_crypto_step_hold_writes_decision_without_transaction(
     """HOLD: decision записан, transaction отсутствует, балансы те же."""
     user_id = await _seed_user(session, usdt="500", btc="0.01")
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})  # нет свежих новостей
+    news_client = FakeNewsClient({"BTC": []})  # нет свежих новостей
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -246,7 +246,7 @@ async def test_crypto_step_hold_writes_decision_without_transaction(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -291,7 +291,7 @@ async def test_crypto_step_sell_drains_asset_position(
     """SELL: позиция уходит в ноль, USDT растёт."""
     user_id = await _seed_user(session, usdt="100", btc="0.01")
     binance = _binance_with_klines(bid="65000.00", ask="65100.00")
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -303,7 +303,7 @@ async def test_crypto_step_sell_drains_asset_position(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -337,14 +337,14 @@ async def test_crypto_step_timeout_records_hold_with_step_timeout_reason(
     """Таймаут шага → HOLD + executed=false + STEP_TIMEOUT."""
     user_id = await _seed_user(session)
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
 
     fake_llm = FakeOpenRouterClient(chat_responses=[price_chat(), trader_chat("HOLD")])
 
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
         step_timeout_seconds=1,
@@ -391,13 +391,13 @@ async def test_crypto_step_price_branch_failure_records_failure(
             SYMBOL: {**make_book_ticker(), "symbol": SYMBOL},
         },
     )
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
     fake_llm = FakeOpenRouterClient(chat_responses=[])
 
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -419,16 +419,16 @@ async def test_crypto_step_news_branch_failure_records_failure(
     user_id = await _seed_user(session)
     binance = _binance_with_klines()
 
-    class BrokenCryptoPanic:
-        async def fetch_recent(self, asset, *, limit=None, kind="news", filter_="hot"):
-            raise RuntimeError("cryptopanic down")
+    class BrokenNewsClient:
+        async def fetch_recent(self, asset, *, limit=None):
+            raise RuntimeError("news provider down")
 
     fake_llm = FakeOpenRouterClient(chat_responses=[price_chat()])
 
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=BrokenCryptoPanic(),  # type: ignore[arg-type]
+        news_client=BrokenNewsClient(),  # type: ignore[arg-type]
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -438,7 +438,7 @@ async def test_crypto_step_news_branch_failure_records_failure(
     )
 
     assert result.failure_reason == PipelineStepFailureReason.NEWS_BRANCH_FAILED.value
-    assert "cryptopanic down" in (result.error_text or "")
+    assert "news provider down" in (result.error_text or "")
 
 
 async def test_crypto_step_trader_parse_failure_records_llm_parse_failed(
@@ -447,7 +447,7 @@ async def test_crypto_step_trader_parse_failure_records_llm_parse_failed(
     """Два битых JSON подряд от TRADER → LLM_PARSE_FAILED."""
     user_id = await _seed_user(session)
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -467,7 +467,7 @@ async def test_crypto_step_trader_parse_failure_records_llm_parse_failed(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -487,7 +487,7 @@ async def test_crypto_step_min_notional_rejection_keeps_decision_not_executed(
     """Если AI хочет купить, но сумма < min_notional, decision.executed=false с MIN_NOTIONAL."""
     user_id = await _seed_user(session, usdt="5")  # 5 USDT — мало для min_notional=10
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -499,7 +499,7 @@ async def test_crypto_step_min_notional_rejection_keeps_decision_not_executed(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -545,7 +545,7 @@ async def test_crypto_step_uses_history_for_trader(
     await session.commit()
 
     binance = _binance_with_klines()
-    cryptopanic = FakeCryptoPanicClient({"BTC": []})
+    news_client = FakeNewsClient({"BTC": []})
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
             price_chat(),
@@ -556,7 +556,7 @@ async def test_crypto_step_uses_history_for_trader(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )

@@ -7,7 +7,7 @@
 
    * PRICE-ветка: тянет klines у Binance, агрегирует :data:`TIMEFRAMES`,
      гонит метрики через :class:`PriceAgent` → :class:`PriceSummary`.
-   * NEWS-ветка: тянет посты CryptoPanic, фильтрует дубликаты,
+   * NEWS-ветка: тянет статьи CoinDesk Data, фильтрует дубликаты,
      для каждого нового вызывает :meth:`NewsAgent.summarize_post`
      и сохраняет новость + эмбеддинг отдельной транзакцией. Затем
      :meth:`NewsAgent.build_agenda`, RAG (cosine top-K, исключая
@@ -30,7 +30,7 @@
    :class:`PipelineStepFailureReason`. Pipeline-runner ловит результат
    и продолжает со следующей монеты.
 
-Все сервисы (Binance, CryptoPanic, OpenRouter, агенты) собраны в
+Все сервисы (Binance, CoinDesk Data, OpenRouter, агенты) собраны в
 :class:`PipelineContext`, чтобы сигнатуры функций оставались узкими и
 не плодились параметры.
 """
@@ -69,7 +69,7 @@ from app.services.binance.prices import (
     fetch_price_metrics,
 )
 from app.services.mock_exchange.executor import ExecutionResult, execute_decision
-from app.services.news.cryptopanic import CryptoPanicClient
+from app.services.news.coindesk import CoinDeskNewsClient
 from app.services.news.deduplicator import filter_new_posts
 from app.services.news.rag import fetch_relevant_history
 from app.services.news.storage import save_news_with_embedding
@@ -96,7 +96,7 @@ class PipelineStepFailureReason(StrEnum):
     """Не получилось собрать ценовые метрики (нет ответа Binance и т.п.)."""
 
     NEWS_BRANCH_FAILED = "NEWS_BRANCH_FAILED"
-    """NEWS-ветка упала (CryptoPanic недоступен, embedding-ошибка и т.п.)."""
+    """NEWS-ветка упала (CoinDesk Data недоступен, embedding-ошибка и т.п.)."""
 
     STEP_ERROR = "STEP_ERROR"
     """Любая другая необработанная ошибка — последний рубеж."""
@@ -114,7 +114,7 @@ class PipelineContext:
         user_id: ID единственного пользователя (создаётся
             ``scripts/init_user.py`` в фазе 3).
         binance_client: Долгоживущий :class:`BinanceClient` с keep-alive.
-        cryptopanic_client: Долгоживущий :class:`CryptoPanicClient`.
+        news_client: Долгоживущий :class:`CoinDeskNewsClient`.
         openrouter_client: Клиент OpenRouter с трекингом в ``llm_calls``.
         exchange_info: Кэш биржевых фильтров, загруженный один раз при
             старте процесса.
@@ -131,7 +131,7 @@ class PipelineContext:
 
     user_id: int
     binance_client: BinanceClient
-    cryptopanic_client: CryptoPanicClient
+    news_client: CoinDeskNewsClient
     openrouter_client: object  # OpenRouterClient | FakeOpenRouterClient
     exchange_info: ExchangeInfoCache
     session_factory: async_sessionmaker[AsyncSession]
@@ -149,7 +149,7 @@ class PipelineContext:
         *,
         user_id: int,
         binance_client: BinanceClient,
-        cryptopanic_client: CryptoPanicClient,
+        news_client: CoinDeskNewsClient,
         openrouter_client: object,
         exchange_info: ExchangeInfoCache,
         session_factory: async_sessionmaker[AsyncSession],
@@ -170,7 +170,7 @@ class PipelineContext:
         return cls(
             user_id=user_id,
             binance_client=binance_client,
-            cryptopanic_client=cryptopanic_client,
+            news_client=news_client,
             openrouter_client=openrouter_client,
             exchange_info=exchange_info,
             session_factory=session_factory,
@@ -513,7 +513,7 @@ async def _news_branch(
     pipeline_run_id: uuid.UUID,
 ) -> NewsFinalScore:
     """Все три LLM-вызова NEWS + RAG; новости сохраняются по одной."""
-    posts = await context.cryptopanic_client.fetch_recent(asset)
+    posts = await context.news_client.fetch_recent(asset)
 
     async with context.session_factory() as dedup_session:
         new_posts = await filter_new_posts(

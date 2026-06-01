@@ -13,7 +13,7 @@ from app.models.base import Base
 
 
 class News(Base):
-    """Новость из CryptoPanic + её LLM-summary + эмбеддинг.
+    """Новость из CoinDesk Data + её LLM-summary + эмбеддинг.
 
     Эмбеддинг считается над текстом ``title + " " + summary_text``.
     Размерность задаётся через настройку ``AGENT_EMBEDDING_DIM`` (по

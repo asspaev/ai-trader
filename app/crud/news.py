@@ -1,4 +1,4 @@
-"""CRUD для модели :class:`News` (CryptoPanic + pgvector RAG)."""
+"""CRUD для модели :class:`News` (CoinDesk Data + pgvector RAG)."""
 
 from __future__ import annotations
 

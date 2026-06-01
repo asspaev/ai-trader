@@ -1,9 +1,9 @@
 """Помощники для тестов pipeline-слоя.
 
-Содержит fake-клиенты Binance и CryptoPanic с минимальной поверхностью,
-которая нужна крипто-шагу, генератор синтетических klines под любой
-интервал, а также фабрики «стандартных» chat/embedding ответов для
-:class:`FakeOpenRouterClient`.
+Содержит fake-клиенты Binance и news-провайдера с минимальной
+поверхностью, которая нужна крипто-шагу, генератор синтетических klines
+под любой интервал, а также фабрики «стандартных» chat/embedding ответов
+для :class:`FakeOpenRouterClient`.
 
 Зачем нужны fakes:
 
@@ -11,8 +11,9 @@
   важен только метод ``get_json`` (`/api/v3/klines`,
   `/api/v3/ticker/bookTicker`), потому что :mod:`app.services.binance.prices`
   и :func:`fetch_book_ticker` идут именно через него.
-* :class:`FakeCryptoPanicClient` подменяет ``fetch_recent`` (это
-  единственный метод, который дёргает pipeline-ветка NEWS).
+* :class:`FakeNewsClient` подменяет ``fetch_recent`` (это единственный
+  метод, который дёргает pipeline-ветка NEWS). Source-agnostic — реальный
+  клиент сейчас CoinDesk Data, был CryptoPanic, может быть любой другой.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from typing import Any
 from app.config import settings
 from app.services.binance.exchange_info import ExchangeInfoCache, SymbolFilters
 from app.services.binance.prices import TIMEFRAMES
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 
 
 # ---------- chat / embedding response builders ----------
@@ -212,8 +213,12 @@ class FakeBinanceClient:
         return None
 
 
-class FakeCryptoPanicClient:
-    """Возвращает заранее уложенные посты по тикеру актива."""
+class FakeNewsClient:
+    """Возвращает заранее уложенные посты по тикеру актива.
+
+    Source-agnostic подмена для :class:`CoinDeskNewsClient`: реализует
+    только метод ``fetch_recent``, который дёргает NEWS-ветка pipeline.
+    """
 
     def __init__(self, posts_by_asset: Mapping[str, Iterable[NewsPost]] | None = None) -> None:
         self._posts: dict[str, list[NewsPost]] = {
@@ -226,8 +231,6 @@ class FakeCryptoPanicClient:
         asset: str,
         *,
         limit: int | None = None,
-        kind: str = "news",
-        filter_: str = "hot",
     ) -> list[NewsPost]:
         self.calls.append(asset.upper())
         return list(self._posts.get(asset.upper(), []))
@@ -254,7 +257,7 @@ def make_news_post(
         asset=asset.upper(),
         title=title,
         url=url,
-        source="CryptoPanic",
+        source="CoinDesk",
         published_at=published_at or datetime(2026, 6, 1, 12, tzinfo=timezone.utc),
         raw_text=raw_text,
     )
@@ -297,7 +300,7 @@ def make_exchange_info(symbols: Iterable[str]) -> ExchangeInfoCache:
 
 __all__ = [
     "FakeBinanceClient",
-    "FakeCryptoPanicClient",
+    "FakeNewsClient",
     "chat_response",
     "embedding_response",
     "klines_for_all_timeframes",

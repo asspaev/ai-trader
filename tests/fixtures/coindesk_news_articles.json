@@ -1,0 +1,88 @@
+{
+  "Data": [
+    {
+      "TYPE": "121",
+      "ID": 1000001,
+      "GUID": "guid-1000001",
+      "PUBLISHED_ON": 1780237200,
+      "TITLE": "Spot Bitcoin ETF inflows hit record high after Fed pause",
+      "URL": "https://www.coindesk.com/markets/spot-bitcoin-etf-inflows-record-high",
+      "BODY": "Spot bitcoin ETFs posted their largest daily net inflow on record yesterday, with $1.2B flowing in across the eleven products tracked.",
+      "LANG": "EN",
+      "SOURCE_ID": 1,
+      "SOURCE_DATA": {
+        "ID": 1,
+        "NAME": "CoinDesk",
+        "URL": "https://www.coindesk.com",
+        "SOURCE_KEY": "coindesk"
+      },
+      "CATEGORY_DATA": [
+        {"ID": 1, "NAME": "BTC", "CATEGORY": "BTC"}
+      ],
+      "SENTIMENT": "POSITIVE",
+      "STATUS": "ACTIVE"
+    },
+    {
+      "TYPE": "121",
+      "ID": 1000002,
+      "GUID": "guid-1000002",
+      "PUBLISHED_ON": 1780225500,
+      "TITLE": "SEC delays decision on second Bitcoin spot ETF amendment",
+      "URL": "https://www.theblock.co/post/sec-delays-btc-etf-amendment",
+      "BODY": null,
+      "LANG": "EN",
+      "SOURCE_ID": 2,
+      "SOURCE_DATA": {
+        "ID": 2,
+        "NAME": "The Block",
+        "URL": "https://www.theblock.co",
+        "SOURCE_KEY": "theblock"
+      },
+      "CATEGORY_DATA": [
+        {"ID": 1, "NAME": "BTC", "CATEGORY": "BTC"}
+      ],
+      "SENTIMENT": "NEUTRAL",
+      "STATUS": "ACTIVE"
+    },
+    {
+      "TYPE": "121",
+      "ID": 1000001,
+      "GUID": "guid-1000001-dup",
+      "PUBLISHED_ON": 1780134120,
+      "TITLE": "Bitcoin miners hash rate climbs to new all-time high",
+      "URL": "https://www.coindesk.com/business/btc-hashrate-ath",
+      "BODY": "Network hash rate crossed a new ATH driven by efficient ASIC deployments in Texas and Paraguay.",
+      "LANG": "EN",
+      "SOURCE_ID": 1,
+      "SOURCE_DATA": {
+        "ID": 1,
+        "NAME": "CoinDesk",
+        "URL": "https://www.coindesk.com",
+        "SOURCE_KEY": "coindesk"
+      },
+      "CATEGORY_DATA": [
+        {"ID": 1, "NAME": "BTC", "CATEGORY": "BTC"}
+      ],
+      "SENTIMENT": "POSITIVE",
+      "STATUS": "ACTIVE"
+    },
+    {
+      "TYPE": "121",
+      "ID": 1000003,
+      "GUID": "guid-1000003",
+      "PUBLISHED_ON": "not-a-timestamp",
+      "TITLE": "Onchain whale moves 1,200 BTC from cold wallet",
+      "URL": "https://decrypt.co/news/btc-whale-move",
+      "BODY": "A previously dormant address tied to the 2014 era moved 1,200 BTC to a new wallet, igniting on-chain speculation.",
+      "LANG": "EN",
+      "SOURCE_ID": 3,
+      "SOURCE_DATA": null,
+      "CATEGORY_DATA": [
+        {"ID": 1, "NAME": "BTC", "CATEGORY": "BTC"}
+      ],
+      "SENTIMENT": "NEUTRAL",
+      "STATUS": "ACTIVE"
+    }
+  ],
+  "Err": {}
+}

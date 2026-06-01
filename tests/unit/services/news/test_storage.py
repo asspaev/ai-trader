@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.config import settings
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 from app.services.news.storage import (
     build_embedding_text,
     save_news_with_embedding,
@@ -36,11 +36,11 @@ def _embedding_response(seed: float = 0.42) -> dict:
 
 def _post() -> NewsPost:
     return NewsPost(
-        external_id="cp-1",
+        external_id="cd-1",
         asset="BTC",
         title="ETF approved",
         url="https://example.com/etf-approved",
-        source="CryptoPanic",
+        source="CoinDesk",
         published_at=datetime(2026, 5, 31, 12, tzinfo=timezone.utc),
         raw_text=None,
     )

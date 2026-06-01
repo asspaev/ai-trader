@@ -22,7 +22,7 @@ from app.crud import news as news_crud
 from app.models import News
 from app.services.llm.embeddings import create_embedding
 from app.services.llm.openrouter import OpenRouterClient
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 
 
 def build_embedding_text(*, title: str, summary_text: str | None) -> str:
@@ -53,7 +53,7 @@ async def save_news_with_embedding(
             (мы делаем только ``flush``).
         llm_client: Уже открытый :class:`OpenRouterClient` для вызова
             ``/embeddings`` (запись в ``llm_calls`` обеспечивает он).
-        post: Распарсенный :class:`NewsPost` из CryptoPanic.
+        post: Распарсенный :class:`NewsPost` от news-провайдера.
         summary_text: NEWS-summary, сгенерированный LLM. Может быть
             ``None``/пустой — тогда эмбеддим только заголовок и
             ``summary_text`` в БД останется ``None``.
@@ -87,9 +87,9 @@ async def save_news_with_embedding(
 def _ensure_aware(value: datetime) -> datetime:
     """Гарантия tz-aware: схема БД требует ``timestamptz``.
 
-    CryptoPanic отдаёт уже tz-aware значения, но если в тестах кто-то
-    подсунет naive — лучше упасть тут с явной ошибкой, чем получить
-    SQL-исключение из глубины драйвера.
+    Live-клиент CoinDesk отдаёт уже tz-aware значения (Unix-timestamp →
+    UTC), но если в тестах кто-то подсунет naive — лучше упасть тут с
+    явной ошибкой, чем получить SQL-исключение из глубины драйвера.
     """
     if value.tzinfo is None:
         raise ValueError(

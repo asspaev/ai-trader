@@ -34,10 +34,10 @@ async def test_create_and_get_by_external_id(session):
     created = await news_crud.create(
         session,
         asset="BTC",
-        external_id="cp-1",
+        external_id="cd-1",
         url="https://example.com/1",
         title="ETF approved",
-        source="CryptoPanic",
+        source="CoinDesk",
         published_at=published_at,
         raw_text="raw",
         summary_text="summary",
@@ -45,7 +45,7 @@ async def test_create_and_get_by_external_id(session):
     )
 
     fetched = await news_crud.get_by_external_id(
-        session, asset="BTC", external_id="cp-1"
+        session, asset="BTC", external_id="cd-1"
     )
 
     assert fetched is not None

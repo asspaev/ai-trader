@@ -4,7 +4,7 @@
 повторно процессить уже сохранённую новость дорого и бессмысленно.
 Учитываем дубликаты как уже сохранённых в БД, так и пришедших в одной
 выдаче (одна и та же новость иногда дублируется в разных категориях
-CryptoPanic).
+news-провайдера).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from collections.abc import Iterable, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import news as news_crud
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 
 
 async def filter_new_posts(
@@ -30,7 +30,7 @@ async def filter_new_posts(
         asset: Тикер актива (фильтр на стороне CRUD по
             ``UNIQUE(asset, external_id)``).
         posts: Итерируемый набор :class:`NewsPost`, обычно прямо из
-            :meth:`CryptoPanicClient.fetch_recent`.
+            :meth:`CoinDeskNewsClient.fetch_recent`.
 
     Returns:
         Список новых постов в исходном порядке. Внутри батча

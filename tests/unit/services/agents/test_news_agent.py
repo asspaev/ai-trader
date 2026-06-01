@@ -21,7 +21,7 @@ from app.services.agents.news_agent import (
     parse_news_final_score,
     parse_news_summary,
 )
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 
 from tests.unit.services.agents._helpers import chat_response
 from tests.unit.services.llm._helpers import FakeOpenRouterClient

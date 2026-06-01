@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.crud import news as news_crud
-from app.services.news.cryptopanic import NewsPost
+from app.services.news.coindesk import NewsPost
 from app.services.news.deduplicator import filter_new_posts, split_seen_unseen
 
 

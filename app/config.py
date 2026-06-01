@@ -6,7 +6,7 @@
 ``.env.example``.
 
 На текущей фазе подключены группы: Database, Logging, AgentModels,
-Binance, OpenRouter, CryptoPanic, Trading, Scheduler, Telegram.
+Binance, OpenRouter, CoinDeskNews, Trading, Scheduler, Telegram.
 """
 
 from __future__ import annotations
@@ -146,24 +146,30 @@ class OpenRouterSettings(BaseSettings):
     )
 
 
-class CryptoPanicSettings(BaseSettings):
-    """Параметры доступа к CryptoPanic (источник новостей).
+class CoinDeskNewsSettings(BaseSettings):
+    """Параметры доступа к CoinDesk Data News API (источник новостей).
 
-    Используем публичный REST: ``GET /v1/posts/?auth_token=...``.
+    Используем REST: ``GET /news/v1/article/list?lang=EN&categories=BTC``.
+    Ключ передаётся в HTTP-заголовке ``Authorization: Apikey <KEY>``.
     ``news_limit_per_crypto`` ограничивает выборку одной монеты за
-    один pipeline-тик (CryptoPanic отдаёт максимум ~20 на странице
-    бесплатного плана; берём столько же).
+    один pipeline-тик (CoinDesk допускает до ``limit=100``; берём 20
+    по умолчанию — этого достаточно для NEWS-агента).
+
+    Историческая справка: до 2026-04-01 источником был CryptoPanic
+    (free Developer API). После его закрытия мигрировали на CoinDesk
+    Data API (бывший CryptoCompare).
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="CRYPTOPANIC_",
+        env_prefix="COINDESK_",
         env_file=_ENV_FILE,
         env_file_encoding=_ENV_ENCODING,
         extra="ignore",
     )
 
-    api_key: str = Field(default="", description="CryptoPanic auth_token")
-    base_url: str = "https://cryptopanic.com/api/v1"
+    api_key: str = Field(default="", description="CoinDesk Data API key")
+    base_url: str = "https://data-api.coindesk.com"
+    language: str = "EN"
     news_limit_per_crypto: int = 20
     timeout_seconds: float = 15.0
     max_retries: int = 3
@@ -326,7 +332,7 @@ class Settings:
         self.agent = AgentModelsSettings()
         self.binance = BinanceSettings()
         self.openrouter = OpenRouterSettings()
-        self.cryptopanic = CryptoPanicSettings()
+        self.coindesk_news = CoinDeskNewsSettings()
         self.trading = TradingSettings()
         self.scheduler = SchedulerSettings()
         self.telegram = TelegramSettings()

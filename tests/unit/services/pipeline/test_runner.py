@@ -25,7 +25,7 @@ from app.services.pipeline.runner import run_pipeline_once
 from tests.unit.services.llm._helpers import FakeOpenRouterClient
 from tests.unit.services.pipeline._helpers import (
     FakeBinanceClient,
-    FakeCryptoPanicClient,
+    FakeNewsClient,
     klines_for_all_timeframes,
     make_book_ticker,
     price_chat,
@@ -96,7 +96,7 @@ def _build_context(
     *,
     user_id: int,
     binance: FakeBinanceClient,
-    cryptopanic: FakeCryptoPanicClient,
+    news_client: FakeNewsClient,
     openrouter: FakeOpenRouterClient,
     session_factory: async_sessionmaker,
     step_timeout_seconds: int = 30,
@@ -104,7 +104,7 @@ def _build_context(
     return PipelineContext(
         user_id=user_id,
         binance_client=binance,  # type: ignore[arg-type]
-        cryptopanic_client=cryptopanic,  # type: ignore[arg-type]
+        news_client=news_client,  # type: ignore[arg-type]
         openrouter_client=openrouter,
         exchange_info=_exchange_info(),
         session_factory=session_factory,
@@ -128,7 +128,7 @@ async def test_run_pipeline_once_processes_three_assets_with_shared_run_id(
     user_id = await _seed_user(session)
 
     binance = _three_asset_binance()
-    cryptopanic = FakeCryptoPanicClient({a: [] for a in ASSETS})
+    news_client = FakeNewsClient({a: [] for a in ASSETS})
 
     # На каждую монету — 1 price + 1 trader (новостей нет, NEWS-агент
     # short-circuits, как в test_hold_writes_decision_without_transaction).
@@ -146,7 +146,7 @@ async def test_run_pipeline_once_processes_three_assets_with_shared_run_id(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -176,11 +176,11 @@ async def test_run_pipeline_once_continues_after_step_failure(
 
     binance = _three_asset_binance()
 
-    class FlakyCryptoPanic:
+    class FlakyNewsClient:
         def __init__(self):
             self._calls = 0
 
-        async def fetch_recent(self, asset, *, limit=None, kind="news", filter_="hot"):
+        async def fetch_recent(self, asset, *, limit=None):
             self._calls += 1
             if asset.upper() == "BTC":
                 raise RuntimeError("flaky on BTC")
@@ -203,7 +203,7 @@ async def test_run_pipeline_once_continues_after_step_failure(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=FlakyCryptoPanic(),  # type: ignore[arg-type]
+        news_client=FlakyNewsClient(),  # type: ignore[arg-type]
         openrouter=fake_llm,
         session_factory=session_factory,
     )
@@ -237,7 +237,7 @@ async def test_run_pipeline_once_uses_default_assets_from_settings(
     user_id = await _seed_user(session)
 
     binance = _three_asset_binance()
-    cryptopanic = FakeCryptoPanicClient({a: [] for a in ASSETS})
+    news_client = FakeNewsClient({a: [] for a in ASSETS})
 
     fake_llm = FakeOpenRouterClient(
         chat_responses=[
@@ -250,7 +250,7 @@ async def test_run_pipeline_once_uses_default_assets_from_settings(
     ctx = _build_context(
         user_id=user_id,
         binance=binance,
-        cryptopanic=cryptopanic,
+        news_client=news_client,
         openrouter=fake_llm,
         session_factory=session_factory,
     )
