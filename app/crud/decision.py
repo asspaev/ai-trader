@@ -87,10 +87,23 @@ async def list_for_pipeline_run(
     return list((await session.execute(stmt)).scalars().all())
 
 
+async def list_all_for_user(
+    session: AsyncSession, *, user_id: int
+) -> list[Decision]:
+    """Все решения пользователя (использует команда ``/stats``)."""
+    stmt = (
+        select(Decision)
+        .where(Decision.user_id == user_id)
+        .order_by(Decision.created_at.asc(), Decision.id.asc())
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 __all__ = [
     "create",
     "get_by_id",
     "mark_executed",
     "list_last_for_asset",
     "list_for_pipeline_run",
+    "list_all_for_user",
 ]
