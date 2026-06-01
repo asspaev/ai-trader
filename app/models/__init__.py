@@ -9,6 +9,7 @@ from app.models.decision import Decision
 from app.models.enums import DecisionAction, LLMCallStatus, TransactionAction
 from app.models.llm_call import LLMCall
 from app.models.news import News
+from app.models.scheduler_state import SchedulerState
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.models.wallet import Wallet
@@ -20,6 +21,7 @@ __all__ = [
     "LLMCall",
     "LLMCallStatus",
     "News",
+    "SchedulerState",
     "Transaction",
     "TransactionAction",
     "User",
