@@ -6,8 +6,8 @@
 ``.env.example``.
 
 На текущей фазе подключены группы: Database, Logging, AgentModels,
-Binance, OpenRouter, CryptoPanic, Trading. Остальные (Telegram,
-Scheduler) добавляются в последующих фазах.
+Binance, OpenRouter, CryptoPanic, Trading, Scheduler. Группа Telegram
+добавится в фазе 9.
 """
 
 from __future__ import annotations
@@ -201,6 +201,83 @@ class TradingSettings(BaseSettings):
         return f"{asset.upper()}{self.quote_asset}"
 
 
+class SchedulerSettings(BaseSettings):
+    """Параметры APScheduler.
+
+    * ``mode='cron'`` — тики выполняются на каждый час из CSV
+      ``cron_hours`` (UTC). Дефолт ``"0,6,12,18"`` — 4 раза в сутки,
+      как описано в ``architecture.md`` §10.
+    * ``mode='interval'`` — тик каждые ``interval_minutes`` минут.
+      При ``run_on_startup=true`` дополнительно делается один тик
+      сразу после старта сервиса (полезно в dev/MVP-прогонах).
+
+    Внутренние гарантии (см. ``services/pipeline/scheduler.py``):
+    ``max_instances=1``, ``coalesce=True`` — следующий тик не
+    запустится, пока предыдущий не завершился, и пропущенные
+    срабатывания склеиваются в один. Флаг паузы между ``/stop`` и
+    ``/resume`` живёт в БД (таблица ``scheduler_state``), а не здесь
+    — он не относится к статической конфигурации.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SCHEDULER_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    mode: str = "cron"
+    cron_hours: str = "0,6,12,18"
+    interval_minutes: int = 30
+    run_on_startup: bool = True
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, value: object) -> object:
+        """Принять регистр в любом виде и нормализовать к lower-case."""
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized not in {"cron", "interval"}:
+                raise ValueError(
+                    f"SCHEDULER_MODE must be 'cron' or 'interval', got {value!r}"
+                )
+            return normalized
+        return value
+
+    @field_validator("cron_hours")
+    @classmethod
+    def _validate_cron_hours(cls, value: str) -> str:
+        """Проверить, что CSV состоит из чисел 0..23."""
+        cleaned: list[str] = []
+        for part in value.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            try:
+                hour = int(item)
+            except ValueError as exc:
+                raise ValueError(
+                    f"SCHEDULER_CRON_HOURS contains non-integer item: {item!r}"
+                ) from exc
+            if not 0 <= hour <= 23:
+                raise ValueError(
+                    f"SCHEDULER_CRON_HOURS hour out of range 0..23: {hour}"
+                )
+            cleaned.append(str(hour))
+        if not cleaned:
+            raise ValueError("SCHEDULER_CRON_HOURS must contain at least one hour")
+        return ",".join(cleaned)
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def _validate_interval_minutes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError(
+                f"SCHEDULER_INTERVAL_MINUTES must be positive, got {value}"
+            )
+        return value
+
+
 class Settings:
     """Композитный контейнер всех групп настроек."""
 
@@ -212,6 +289,7 @@ class Settings:
         self.openrouter = OpenRouterSettings()
         self.cryptopanic = CryptoPanicSettings()
         self.trading = TradingSettings()
+        self.scheduler = SchedulerSettings()
 
 
 settings = Settings()
