@@ -1,0 +1,21 @@
+{
+  "id": "gen-01HXYZTEST0000000000000001",
+  "object": "chat.completion",
+  "created": 1735689600,
+  "model": "deepseek/deepseek-chat",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"action\":\"HOLD\",\"buy_fraction\":null,\"reasoning\":\"Стабильный боковик, явных триггеров нет.\"}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 412,
+    "completion_tokens": 38,
+    "total_tokens": 450
+  }
+}
