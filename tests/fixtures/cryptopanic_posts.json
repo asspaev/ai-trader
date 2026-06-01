@@ -1,0 +1,89 @@
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "kind": "news",
+      "domain": "cointelegraph.com",
+      "source": {
+        "title": "Cointelegraph",
+        "region": "en",
+        "domain": "cointelegraph.com",
+        "path": null
+      },
+      "title": "Spot Bitcoin ETF inflows hit record high after Fed pause",
+      "published_at": "2026-05-31T14:20:00Z",
+      "slug": "spot-bitcoin-etf-inflows-record-high",
+      "id": 1000001,
+      "url": "https://cryptopanic.com/news/1000001/click/",
+      "created_at": "2026-05-31T14:20:30Z",
+      "votes": {
+        "negative": 1,
+        "positive": 14,
+        "important": 8,
+        "liked": 3,
+        "disliked": 0,
+        "lol": 0,
+        "toxic": 0,
+        "saved": 5,
+        "comments": 4
+      },
+      "original_url": "https://cointelegraph.com/news/spot-bitcoin-etf-inflows-record-high",
+      "currencies": [
+        {"code": "BTC", "title": "Bitcoin", "slug": "bitcoin", "url": "https://cryptopanic.com/news/bitcoin/"}
+      ]
+    },
+    {
+      "kind": "news",
+      "domain": "theblock.co",
+      "source": {
+        "title": "The Block",
+        "region": "en",
+        "domain": "theblock.co"
+      },
+      "title": "SEC delays decision on second Bitcoin spot ETF amendment",
+      "published_at": "2026-05-31T11:05:00Z",
+      "slug": "sec-delays-btc-etf-amendment",
+      "id": 1000002,
+      "url": "https://cryptopanic.com/news/1000002/click/",
+      "created_at": "2026-05-31T11:05:12Z",
+      "original_url": "https://www.theblock.co/post/sec-delays-btc-etf-amendment",
+      "currencies": [
+        {"code": "BTC", "title": "Bitcoin", "slug": "bitcoin", "url": "https://cryptopanic.com/news/bitcoin/"}
+      ]
+    },
+    {
+      "kind": "news",
+      "domain": "coindesk.com",
+      "source": {
+        "title": "CoinDesk",
+        "region": "en",
+        "domain": "coindesk.com"
+      },
+      "title": "Bitcoin miners hash rate climbs to new all-time high",
+      "published_at": "2026-05-30T09:42:00Z",
+      "slug": "btc-hashrate-ath",
+      "id": 1000001,
+      "url": "https://cryptopanic.com/news/1000001-dup/click/",
+      "created_at": "2026-05-30T09:42:05Z",
+      "original_url": "https://www.coindesk.com/business/btc-hashrate-ath",
+      "currencies": [
+        {"code": "BTC", "title": "Bitcoin", "slug": "bitcoin", "url": "https://cryptopanic.com/news/bitcoin/"}
+      ]
+    },
+    {
+      "kind": "news",
+      "domain": "decrypt.co",
+      "source": null,
+      "title": "Onchain whale moves 1,200 BTC from cold wallet",
+      "published_at": "not-a-date",
+      "id": 1000003,
+      "url": "https://cryptopanic.com/news/1000003/click/",
+      "original_url": "https://decrypt.co/news/btc-whale-move",
+      "currencies": [
+        {"code": "BTC", "title": "Bitcoin", "slug": "bitcoin"}
+      ]
+    }
+  ]
+}
