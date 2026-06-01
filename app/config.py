@@ -69,12 +69,35 @@ class LoggingSettings(BaseSettings):
     dir: str = "./logs"
 
 
+class AgentModelsSettings(BaseSettings):
+    """Имена LLM-моделей для агентов и эмбеддинга.
+
+    Размерность эмбеддинга ``embedding_dim`` фиксируется в схеме БД
+    (колонка ``news.embedding``), поэтому смена эмбеддинг-модели на ту,
+    что выдаёт другой dim, потребует миграции.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AGENT_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    price_model: str = "deepseek/deepseek-chat"
+    news_model: str = "deepseek/deepseek-chat"
+    trader_model: str = "deepseek/deepseek-chat"
+    embedding_model: str = "openai/text-embedding-3-small"
+    embedding_dim: int = 1536
+
+
 class Settings:
     """Композитный контейнер всех групп настроек."""
 
     def __init__(self) -> None:
         self.db = DatabaseSettings()
         self.logging = LoggingSettings()
+        self.agent = AgentModelsSettings()
 
 
 settings = Settings()
