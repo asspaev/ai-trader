@@ -7,6 +7,12 @@
 Telegram-нотификатор (notify_pipeline_summary, фаза 9) и метрики
 (``pnl.py``, фаза 10).
 
+После каждой монеты runner зовёт :meth:`PipelineNotifier.notify_step`,
+а в конце — :meth:`notify_pipeline_summary`. Любая ошибка нотификатора
+ловится здесь же и логируется: pipeline не должен валиться из-за
+проблем с Telegram. По умолчанию используется :class:`NoOpNotifier`
+— это удобно для тестов и для случая «бот не сконфигурирован».
+
 Само по себе планирование (cron/interval, защита от перекрытий)
 относится к фазе 8 (``services/pipeline/scheduler.py``) — runner здесь
 остаётся чистой корутиной и легко тестируется в изоляции.
@@ -17,7 +23,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from loguru import logger
 
@@ -27,6 +33,13 @@ from app.services.pipeline.crypto_step import (
     PipelineContext,
     crypto_step,
 )
+
+if TYPE_CHECKING:
+    # Импорт под TYPE_CHECKING — runtime импорт сделан внутри функции,
+    # чтобы избежать циклической зависимости pipeline ↔ pipeline/notifier
+    # на этапе загрузки модулей (notifier.py импортирует PipelineRunResult
+    # отсюда).
+    from app.services.pipeline.notifier import PipelineNotifier
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +68,7 @@ async def run_pipeline_once(
     *,
     context: PipelineContext,
     assets: Sequence[str] | None = None,
+    notifier: "PipelineNotifier | None" = None,
 ) -> PipelineRunResult:
     """Запустить ровно один тик и вернуть его итог.
 
@@ -64,11 +78,21 @@ async def run_pipeline_once(
             берётся ``settings.trading.symbols`` (``["BTC", "ETH",
             "TON"]``). Это переопределение полезно в тестах и при
             ручном запуске одной монеты из Telegram-команды.
+        notifier: Реализация :class:`PipelineNotifier`. Если не задана,
+            используется :class:`NoOpNotifier` — это безопасный
+            дефолт для тестов и для случая, когда Telegram-бот
+            отключён.
 
     Returns:
         :class:`PipelineRunResult` с метаданными тика и списком
         результатов по каждому активу.
     """
+    # Поздний импорт, чтобы избежать цикла notifier.py ↔ runner.py
+    # (notifier.py импортирует PipelineRunResult отсюда).
+    from app.services.pipeline.notifier import NoOpNotifier
+
+    active_notifier = notifier if notifier is not None else NoOpNotifier()
+
     pipeline_run_id = uuid.uuid4()
     started_at = datetime.now(timezone.utc)
     use_assets = [a.upper() for a in (assets if assets is not None else settings.trading.symbols)]
@@ -90,6 +114,7 @@ async def run_pipeline_once(
             pipeline_run_id=pipeline_run_id,
         )
         steps.append(step_result)
+        await _safe_notify_step(active_notifier, step_result, bound=bound)
 
     finished_at = datetime.now(timezone.utc)
     duration = (finished_at - started_at).total_seconds()
@@ -100,12 +125,52 @@ async def run_pipeline_once(
         summary=_format_summary(steps),
     )
 
-    return PipelineRunResult(
+    run_result = PipelineRunResult(
         pipeline_run_id=pipeline_run_id,
         started_at=started_at,
         finished_at=finished_at,
         steps=tuple(steps),
     )
+    await _safe_notify_summary(active_notifier, run_result, bound=bound)
+    return run_result
+
+
+async def _safe_notify_step(
+    notifier: "PipelineNotifier",
+    step: CryptoStepResult,
+    *,
+    bound,
+) -> None:
+    """Вызвать ``notify_step`` и проглотить любую ошибку.
+
+    Падение нотификатора не должно валить весь pipeline-тик: цена ошибки
+    в публикации сообщения — потерянное уведомление, а не потерянная
+    сделка.
+    """
+    try:
+        await notifier.notify_step(step)
+    except Exception as exc:  # noqa: BLE001
+        bound.warning(
+            "Notifier.notify_step failed for {asset}: {err}",
+            asset=step.asset,
+            err=f"{type(exc).__name__}: {exc}",
+        )
+
+
+async def _safe_notify_summary(
+    notifier: "PipelineNotifier",
+    run: PipelineRunResult,
+    *,
+    bound,
+) -> None:
+    """Вызвать ``notify_pipeline_summary`` и проглотить любую ошибку."""
+    try:
+        await notifier.notify_pipeline_summary(run)
+    except Exception as exc:  # noqa: BLE001
+        bound.warning(
+            "Notifier.notify_pipeline_summary failed: {err}",
+            err=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _format_summary(steps: Sequence[CryptoStepResult]) -> str:
