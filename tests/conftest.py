@@ -102,8 +102,8 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """
     async with engine.begin() as conn:
         await conn.exec_driver_sql(
-            "TRUNCATE TABLE llm_calls, news, transactions, decisions, "
-            "wallets, users RESTART IDENTITY CASCADE"
+            "TRUNCATE TABLE scheduler_state, llm_calls, news, transactions, "
+            "decisions, wallets, users RESTART IDENTITY CASCADE"
         )
 
     factory = async_sessionmaker(bind=engine, expire_on_commit=False)

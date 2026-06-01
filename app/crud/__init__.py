@@ -5,6 +5,22 @@
 поддерживаются единообразно.
 """
 
-from app.crud import decision, llm_call, news, transaction, user, wallet
+from app.crud import (
+    decision,
+    llm_call,
+    news,
+    scheduler_state,
+    transaction,
+    user,
+    wallet,
+)
 
-__all__ = ["decision", "llm_call", "news", "transaction", "user", "wallet"]
+__all__ = [
+    "decision",
+    "llm_call",
+    "news",
+    "scheduler_state",
+    "transaction",
+    "user",
+    "wallet",
+]
