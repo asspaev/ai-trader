@@ -6,7 +6,7 @@
 ``.env.example``.
 
 На текущей фазе подключены группы: Database, Logging, AgentModels,
-Binance, OpenRouter, Trading. Остальные (CryptoPanic, Telegram,
+Binance, OpenRouter, CryptoPanic, Trading. Остальные (Telegram,
 Scheduler) добавляются в последующих фазах.
 """
 
@@ -146,6 +146,30 @@ class OpenRouterSettings(BaseSettings):
     )
 
 
+class CryptoPanicSettings(BaseSettings):
+    """Параметры доступа к CryptoPanic (источник новостей).
+
+    Используем публичный REST: ``GET /v1/posts/?auth_token=...``.
+    ``news_limit_per_crypto`` ограничивает выборку одной монеты за
+    один pipeline-тик (CryptoPanic отдаёт максимум ~20 на странице
+    бесплатного плана; берём столько же).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CRYPTOPANIC_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    api_key: str = Field(default="", description="CryptoPanic auth_token")
+    base_url: str = "https://cryptopanic.com/api/v1"
+    news_limit_per_crypto: int = 20
+    timeout_seconds: float = 15.0
+    max_retries: int = 3
+    retry_backoff_base: float = 1.0
+
+
 class TradingSettings(BaseSettings):
     """Параметры торговой стратегии (символы, стартовый капитал, лимиты)."""
 
@@ -186,6 +210,7 @@ class Settings:
         self.agent = AgentModelsSettings()
         self.binance = BinanceSettings()
         self.openrouter = OpenRouterSettings()
+        self.cryptopanic = CryptoPanicSettings()
         self.trading = TradingSettings()
 
 
