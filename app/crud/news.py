@@ -21,6 +21,7 @@ async def create(
     published_at: datetime,
     raw_text: str | None = None,
     summary_text: str | None = None,
+    summary_sentiment: str | None = None,
     embedding: list[float] | None = None,
 ) -> News:
     news = News(
@@ -32,6 +33,7 @@ async def create(
         published_at=published_at,
         raw_text=raw_text,
         summary_text=summary_text,
+        summary_sentiment=summary_sentiment,
         embedding=embedding,
     )
     session.add(news)
@@ -62,6 +64,30 @@ async def exists_external_ids(
         News.asset == asset, News.external_id.in_(external_ids)
     )
     return {row[0] for row in (await session.execute(stmt)).all()}
+
+
+async def fetch_cached_by_external_ids(
+    session: AsyncSession, *, external_ids: list[str]
+) -> dict[str, News]:
+    """Найти уже сохранённые новости по ``external_id`` без фильтра по asset.
+
+    Используется, чтобы переиспользовать summary + embedding статьи,
+    которая уже была обработана под другую монету (CoinDesk Data выдаёт
+    одну и ту же статью при запросах по разным ``categories=BTC|ETH|TON``,
+    если она тегнута сразу несколькими активами).
+
+    Возвращает словарь ``external_id -> News``. На один ``external_id``
+    кладём первую попавшуюся строку — summary/embedding должны быть
+    идентичны во всех копиях (мы их именно так и копируем).
+    """
+    if not external_ids:
+        return {}
+    stmt = select(News).where(News.external_id.in_(external_ids))
+    rows = (await session.execute(stmt)).scalars().all()
+    cache: dict[str, News] = {}
+    for row in rows:
+        cache.setdefault(row.external_id, row)
+    return cache
 
 
 async def list_recent_for_asset(
@@ -113,6 +139,7 @@ __all__ = [
     "get_by_id",
     "get_by_external_id",
     "exists_external_ids",
+    "fetch_cached_by_external_ids",
     "list_recent_for_asset",
     "search_similar",
 ]

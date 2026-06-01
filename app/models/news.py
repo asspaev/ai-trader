@@ -22,7 +22,10 @@ class News(Base):
 
     __tablename__ = "news"
     __table_args__ = (
-        UniqueConstraint("url", name="uq_news_url"),
+        # URL глобально НЕ уникален: CoinDesk Data отдаёт одну и ту же
+        # статью при запросе по разным categories=BTC|ETH|TON, и мы
+        # храним её отдельной строкой на каждый затронутый asset
+        # (per-asset summary + embedding, RAG-поиск тоже per-asset).
         UniqueConstraint("asset", "external_id", name="uq_news_asset_external_id"),
         Index("ix_news_asset_published_at", "asset", "published_at"),
     )
@@ -38,6 +41,13 @@ class News(Base):
     )
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sentiment, который NEWS-агент присвоил при суммаризации.
+    # Кэшируем, чтобы при появлении этой же статьи под другим активом
+    # переиспользовать готовый summary без повторного LLM-вызова.
+    # Значения соответствуют ``app.services.agents.base.Sentiment``
+    # (``bullish`` / ``bearish`` / ``neutral``); ``NULL`` — для строк,
+    # созданных до миграции 0005 или сохранённых через CRUD без sentiment.
+    summary_sentiment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.agent.embedding_dim), nullable=True
     )

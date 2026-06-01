@@ -44,6 +44,7 @@ async def save_news_with_embedding(
     *,
     post: NewsPost,
     summary_text: str | None,
+    summary_sentiment: str | None = None,
     pipeline_run_id: uuid.UUID | None = None,
 ) -> News:
     """Получить эмбеддинг и записать новость в БД одной транзакцией.
@@ -57,6 +58,9 @@ async def save_news_with_embedding(
         summary_text: NEWS-summary, сгенерированный LLM. Может быть
             ``None``/пустой — тогда эмбеддим только заголовок и
             ``summary_text`` в БД останется ``None``.
+        summary_sentiment: Sentiment-метка, присвоенная NEWS-агентом
+            при суммаризации. Кэшируется, чтобы переиспользовать при
+            появлении статьи под другим активом.
         pipeline_run_id: Идентификатор pipeline-тика; пробрасывается
             в ``llm_calls.pipeline_run_id``.
 
@@ -80,7 +84,39 @@ async def save_news_with_embedding(
         published_at=_ensure_aware(post.published_at),
         raw_text=post.raw_text,
         summary_text=(summary_text.strip() if summary_text else None),
+        summary_sentiment=summary_sentiment,
         embedding=embedding,
+    )
+
+
+async def save_news_reusing_cached(
+    session: AsyncSession,
+    *,
+    post: NewsPost,
+    summary_text: str | None,
+    summary_sentiment: str | None,
+    embedding: list[float] | None,
+) -> News:
+    """Сохранить новую копию новости под другой ``asset``, переиспользуя
+    уже посчитанные summary + sentiment + embedding из существующей строки.
+
+    LLM и embedding-сервис не вызываются — это и есть смысл функции.
+    Используется, когда CoinDesk Data вернул одну и ту же статью под
+    разные ``categories=BTC|ETH|TON``, и в БД уже есть запись по этому
+    ``external_id`` для другого актива.
+    """
+    return await news_crud.create(
+        session,
+        asset=post.asset,
+        external_id=post.external_id,
+        url=post.url,
+        title=post.title,
+        source=post.source,
+        published_at=_ensure_aware(post.published_at),
+        raw_text=post.raw_text,
+        summary_text=(summary_text.strip() if summary_text else None),
+        summary_sentiment=summary_sentiment,
+        embedding=list(embedding) if embedding is not None else None,
     )
 
 
@@ -98,4 +134,8 @@ def _ensure_aware(value: datetime) -> datetime:
     return value
 
 
-__all__ = ["build_embedding_text", "save_news_with_embedding"]
+__all__ = [
+    "build_embedding_text",
+    "save_news_reusing_cached",
+    "save_news_with_embedding",
+]

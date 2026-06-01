@@ -50,13 +50,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
 from app.crud import decision as decision_crud
+from app.crud import news as news_crud
 from app.crud import wallet as wallet_crud
-from app.models import Decision
+from app.models import Decision, News
 from app.models.enums import DecisionAction
-from app.services.agents.base import AgentError, AgentJSONParseError
+from app.services.agents.base import AgentError, AgentJSONParseError, Sentiment
 from app.services.agents.news_agent import (
     NewsAgent,
     NewsFinalScore,
+    NewsSummary,
     SummarizedPost,
 )
 from app.services.agents.price_agent import PriceAgent, PriceSummary
@@ -72,7 +74,10 @@ from app.services.mock_exchange.executor import ExecutionResult, execute_decisio
 from app.services.news.coindesk import CoinDeskNewsClient
 from app.services.news.deduplicator import filter_new_posts
 from app.services.news.rag import fetch_relevant_history
-from app.services.news.storage import save_news_with_embedding
+from app.services.news.storage import (
+    save_news_reusing_cached,
+    save_news_with_embedding,
+)
 
 
 class PipelineStepFailureReason(StrEnum):
@@ -512,16 +517,52 @@ async def _news_branch(
     asset: str,
     pipeline_run_id: uuid.UUID,
 ) -> NewsFinalScore:
-    """Все три LLM-вызова NEWS + RAG; новости сохраняются по одной."""
+    """Все три LLM-вызова NEWS + RAG; новости сохраняются по одной.
+
+    Если статья уже есть в БД под другим активом (одна и та же новость
+    приходит под разные ``categories=BTC|ETH|TON``), переиспользуем её
+    сохранённые ``summary_text`` + ``summary_sentiment`` + ``embedding``
+    и не зовём LLM/embedding-сервис повторно — это экономит как
+    summary-вызов, так и embedding-вызов на каждый такой дубль.
+    """
+    bound = logger.bind(
+        component="pipeline.crypto_step",
+        asset=asset,
+        pipeline_run_id=str(pipeline_run_id),
+    )
+
     posts = await context.news_client.fetch_recent(asset)
 
     async with context.session_factory() as dedup_session:
         new_posts = await filter_new_posts(
             dedup_session, asset=asset, posts=posts
         )
+        cached_by_eid = await news_crud.fetch_cached_by_external_ids(
+            dedup_session,
+            external_ids=[p.external_id for p in new_posts],
+        )
 
     summarized: list[SummarizedPost] = []
+    reused_count = 0
     for post in new_posts:
+        cached = cached_by_eid.get(post.external_id)
+        reusable = _extract_reusable_summary(cached)
+
+        if reusable is not None:
+            cached_summary, cached_embedding = reusable
+            async with context.session_factory() as save_session:
+                await save_news_reusing_cached(
+                    save_session,
+                    post=post,
+                    summary_text=cached_summary.summary,
+                    summary_sentiment=cached_summary.sentiment.value,
+                    embedding=cached_embedding,
+                )
+                await save_session.commit()
+            summarized.append(SummarizedPost(post=post, summary=cached_summary))
+            reused_count += 1
+            continue
+
         summary = await context.news_agent.summarize_post(
             post, pipeline_run_id=pipeline_run_id
         )
@@ -531,10 +572,18 @@ async def _news_branch(
                 context.openrouter_client,  # type: ignore[arg-type]
                 post=post,
                 summary_text=summary.summary,
+                summary_sentiment=summary.sentiment.value,
                 pipeline_run_id=pipeline_run_id,
             )
             await save_session.commit()
         summarized.append(SummarizedPost(post=post, summary=summary))
+
+    if reused_count:
+        bound.info(
+            "Reused cached summary/embedding for {n}/{total} news posts",
+            n=reused_count,
+            total=len(new_posts),
+        )
 
     agenda = await context.news_agent.build_agenda(
         asset, summarized, pipeline_run_id=pipeline_run_id
@@ -644,6 +693,35 @@ def _with_duration(result: CryptoStepResult, duration: float) -> CryptoStepResul
         failure_reason=result.failure_reason,
         error_text=result.error_text,
         duration_seconds=duration,
+    )
+
+
+def _extract_reusable_summary(
+    cached: News | None,
+) -> tuple[NewsSummary, list[float]] | None:
+    """Если в БД уже есть строка по этому ``external_id`` (для другого
+    актива) с полным набором кэшируемых полей — собрать из неё
+    :class:`NewsSummary` + embedding для копирования. Иначе вернуть
+    ``None``: тогда вызывающий сходит в LLM/embedding как обычно.
+
+    Не переиспользуем, если у строки нет ``summary_text``,
+    ``summary_sentiment`` или ``embedding``: это могут быть «древние»
+    записи до миграции 0005 или незавершённые из-за давнего сбоя —
+    лучше прогнать заново, чем складировать неполный кэш.
+    """
+    if cached is None:
+        return None
+    if not cached.summary_text or not cached.summary_sentiment:
+        return None
+    if cached.embedding is None:
+        return None
+    try:
+        sentiment = Sentiment.parse(cached.summary_sentiment)
+    except ValueError:
+        return None
+    return (
+        NewsSummary(summary=cached.summary_text, sentiment=sentiment),
+        list(cached.embedding),
     )
 
 
