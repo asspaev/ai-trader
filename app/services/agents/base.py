@@ -47,8 +47,12 @@ class AgentJSONParseError(AgentError):
     повторный prompt при ретрае.
     """
 
-    def __init__(self, message: str, *, raw_content: str) -> None:
-        super().__init__(message)
+    # ``raw_content`` пробрасываем в ``args`` (а не только в атрибут),
+    # чтобы исключение корректно pickle/unpickle-илось — иначе loguru
+    # с ``enqueue=True`` падает при передаче записи в фоновую очередь
+    # (default __reduce__ для BaseException зовёт ``cls(*self.args)``).
+    def __init__(self, message: str, raw_content: str) -> None:
+        super().__init__(message, raw_content)
         self.raw_content = raw_content
 
 
@@ -153,19 +157,31 @@ _JSON_FENCE_RE = re.compile(
 def parse_strict_json(content: str) -> dict[str, Any]:
     """Распарсить ``content`` как JSON-объект.
 
-    Если LLM завернул ответ в ```json …``` блок, пытаемся выкусить
-    его перед парсингом. Любые другие отклонения от формата (массив
-    на верхнем уровне, лишний текст до/после) — это ошибка агента,
+    Поведение:
+
+    * Если LLM завернул ответ в ```json …``` блок, выкусываем тело
+      блока перед парсингом.
+    * Иначе ищем первую ``{`` и пытаемся прочитать **один** JSON-объект
+      через :meth:`json.JSONDecoder.raw_decode` — это терпимо к
+      «хвосту» из текста после JSON (часто DeepSeek дописывает прозу
+      после ответа, что давало ``JSONDecodeError: Extra data``).
+
+    Массив на верхнем уровне или мусор без ``{`` — ошибка агента,
     бросаем :class:`AgentJSONParseError` с исходным ``content``.
     """
     raw = content.strip()
-    candidate = raw
     fence_match = _JSON_FENCE_RE.search(raw)
-    if fence_match:
-        candidate = fence_match.group(1).strip()
+    candidate = fence_match.group(1).strip() if fence_match else raw
+
+    start = candidate.find("{")
+    if start == -1:
+        raise AgentJSONParseError(
+            "LLM response contains no JSON object",
+            raw_content=content,
+        )
 
     try:
-        parsed = json.loads(candidate)
+        parsed, _end = json.JSONDecoder().raw_decode(candidate, start)
     except json.JSONDecodeError as exc:
         raise AgentJSONParseError(
             f"LLM response is not valid JSON: {exc.msg}",

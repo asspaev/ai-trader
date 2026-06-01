@@ -95,3 +95,28 @@ def test_parse_strict_json_raises_on_array() -> None:
 def test_parse_strict_json_raises_on_garbage() -> None:
     with pytest.raises(AgentJSONParseError):
         parse_strict_json("это не JSON")
+
+
+def test_parse_strict_json_tolerates_trailing_prose() -> None:
+    """DeepSeek иногда дописывает текст после JSON — старая логика падала
+    с ``json.JSONDecodeError: Extra data``, теперь читаем первый объект."""
+    content = '{"a": 1}\n\nThis is my reasoning behind the answer.'
+    assert parse_strict_json(content) == {"a": 1}
+
+
+def test_parse_strict_json_tolerates_leading_prose() -> None:
+    """Аналогично — текст перед JSON тоже не должен ронять парсер."""
+    content = "Here is the answer:\n{\"a\": 1}"
+    assert parse_strict_json(content) == {"a": 1}
+
+
+def test_agent_json_parse_error_is_picklable() -> None:
+    """loguru с ``enqueue=True`` сериализует исключения в фоновую очередь —
+    custom ``__init__`` с keyword-only ломал unpickle."""
+    import pickle
+
+    err = AgentJSONParseError("boom", raw_content="<<<")
+    restored = pickle.loads(pickle.dumps(err))
+    assert isinstance(restored, AgentJSONParseError)
+    assert str(restored) == str(err)
+    assert restored.raw_content == "<<<"
