@@ -6,7 +6,7 @@
 ``.env.example``.
 
 На текущей фазе подключены группы: Database, Logging, AgentModels,
-Binance, Trading. Остальные (OpenRouter, CryptoPanic, Telegram,
+Binance, OpenRouter, Trading. Остальные (CryptoPanic, Telegram,
 Scheduler) добавляются в последующих фазах.
 """
 
@@ -113,6 +113,39 @@ class BinanceSettings(BaseSettings):
     retry_backoff_base: float = 1.0
 
 
+class OpenRouterSettings(BaseSettings):
+    """Параметры подключения к OpenRouter (chat + embeddings).
+
+    Все вызовы LLM в проекте идут через OpenRouter (см.
+    :mod:`app.services.llm.openrouter`). Ретрай-политика — экспоненциальный
+    backoff ``base ** (attempt - 1)``: при дефолтном ``base=3`` и
+    ``max_retries=4`` получаем sleep-паузы ``1s / 3s / 9s`` между четырьмя
+    попытками подряд. ``timeout_seconds`` — per-request HTTP-таймаут,
+    который передаётся в ``httpx.Timeout``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="OPENROUTER_",
+        env_file=_ENV_FILE,
+        env_file_encoding=_ENV_ENCODING,
+        extra="ignore",
+    )
+
+    api_key: str = Field(default="", description="OpenRouter API key (Bearer)")
+    base_url: str = "https://openrouter.ai/api/v1"
+    timeout_seconds: float = 60.0
+    max_retries: int = 4
+    retry_backoff_base: float = 3.0
+    http_referer: str | None = Field(
+        default=None,
+        description="Опционально — HTTP-Referer для OpenRouter-аналитики",
+    )
+    app_title: str | None = Field(
+        default=None,
+        description="Опционально — X-Title для OpenRouter-аналитики",
+    )
+
+
 class TradingSettings(BaseSettings):
     """Параметры торговой стратегии (символы, стартовый капитал, лимиты)."""
 
@@ -152,6 +185,7 @@ class Settings:
         self.logging = LoggingSettings()
         self.agent = AgentModelsSettings()
         self.binance = BinanceSettings()
+        self.openrouter = OpenRouterSettings()
         self.trading = TradingSettings()
 
 
