@@ -9,10 +9,8 @@
 * :mod:`app.services.pipeline.runner` — один полный тик: создаёт
   ``pipeline_run_id`` и последовательно обходит монеты, собирая
   агрегированный :class:`PipelineRunResult`.
-
-Логика scheduler (cron/interval) находится в отдельном модуле,
-который будет реализован в фазе 8; pipeline-слой остаётся
-тестируемым в изоляции — runner просто вызывается как корутина.
+* :mod:`app.services.pipeline.scheduler` — APScheduler-обёртка
+  (cron / interval, защита от перекрытий, флаг паузы в БД).
 """
 
 from app.services.pipeline.crypto_step import (
@@ -21,6 +19,11 @@ from app.services.pipeline.crypto_step import (
     PipelineStepFailureReason,
 )
 from app.services.pipeline.runner import PipelineRunResult, run_pipeline_once
+from app.services.pipeline.scheduler import (
+    PIPELINE_JOB_ID,
+    PipelineRunner,
+    PipelineScheduler,
+)
 
 
 # ВАЖНО: функцию ``crypto_step`` на уровне пакета НЕ ре-экспортируем.
@@ -35,8 +38,11 @@ from app.services.pipeline.runner import PipelineRunResult, run_pipeline_once
 
 __all__ = [
     "CryptoStepResult",
+    "PIPELINE_JOB_ID",
     "PipelineContext",
     "PipelineRunResult",
+    "PipelineRunner",
+    "PipelineScheduler",
     "PipelineStepFailureReason",
     "run_pipeline_once",
 ]
