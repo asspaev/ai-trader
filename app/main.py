@@ -64,9 +64,12 @@ async def _run() -> None:
     async with SessionLocal() as session:
         user = await user_crud.get_singleton(session)
     if user is None:
-        log.error(
-            "No init user in DB — run `python -m scripts.init_user` first"
+        log.warning(
+            "No init user in DB — sleeping indefinitely so the container "
+            "stays alive; exec into it and run "
+            "`python -m scripts.init_user`, then restart the process"
         )
+        await asyncio.Event().wait()
         return
 
     log.info(
