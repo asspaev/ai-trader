@@ -31,7 +31,7 @@ app/
 ├── crud/              # ВСЕ обращения к БД только отсюда
 └── services/
     ├── binance/       # public API (client, exchange_info, prices)
-    ├── news/          # cryptopanic, deduplicator
+    ├── news/          # coindesk, deduplicator
     ├── llm/           # openrouter (с LLMCallTracker), embeddings
     ├── mock_exchange/ # executor, fees
     ├── agents/        # price_agent, news_agent, trader_agent + prompts/*.md
@@ -50,7 +50,7 @@ alembic/  docs/  scripts/  tests/
 - **Язык кода:** docstring (google-style), комментарии внутри функций, prompts агентов, тексты Telegram — **на русском**. Логи loguru — **на английском**. Идентификаторы — английские.
 - **Логи:** loguru обязателен, но без шума — содержательные сообщения, обязательный `logger.bind(pipeline_run_id=..., asset=..., llm_call_id=...)` где применимо.
 - **БД:** все `select`/`insert`/`update` — только через `app/crud/*`. Никакие сервисы и агенты не пишут SQL/ORM сами.
-- **Конфиг:** `config.py` — несколько `BaseSettings`-классов с префиксами (`DB_`, `BINANCE_`, `OPENROUTER_`, `AGENT_`, `CRYPTOPANIC_`, `TELEGRAM_`, `SCHEDULER_`, `TRADING_`, `LOG_`), композируются в один `Settings`. При любом изменении `config.py` синхронно обновлять `.env.example`.
+- **Конфиг:** `config.py` — несколько `BaseSettings`-классов с префиксами (`DB_`, `BINANCE_`, `OPENROUTER_`, `AGENT_`, `COINDESK_`, `TELEGRAM_`, `SCHEDULER_`, `TRADING_`, `LOG_`), композируются в один `Settings`. При любом изменении `config.py` синхронно обновлять `.env.example`.
 - **SOLID:** для 3 криптовалют — общий интерфейс/конфиг, никакого копипаста с заменой констант. Каждая монета — параметр, не отдельный класс.
 - **Тесты:** при добавлении/изменении кода — пишем/правим юнит-тесты в `tests/`. Список обязательных групп — `architecture.md` раздел 14.
 - **Атомарность сделки:** запись `decision → transaction → wallet update` — в одной транзакции БД.
@@ -72,7 +72,7 @@ alembic/  docs/  scripts/  tests/
 8. **Таймауты:** LLM-вызов 60 сек, обработка одной монеты 300 сек. По таймауту шага монеты — `decision` пишется как `HOLD` + `executed=false` + `not_executed_reason="STEP_TIMEOUT"`, идём к следующей монете.
 9. **Ретрай LLM:** 4 попытки, экспоненциальный backoff `1s / 3s / 9s / 27s` на 429, 5xx, `TimeoutException`, `ConnectError`. После провала — `llm_calls.status=ERROR`, монета пропускается, в Telegram уходит уведомление.
 10. **Таймфреймы PRICE-агента:** `1m, 30m, 1h, 3h, 6h, 12h, 1d, 3d, 7d (=1w), 1M, 3M, 6M, 1Y, 3Y, 5Y`. `3h` агрегируется из 1h, `3M/6M/1Y/3Y/5Y` — из 1M. Агенту отдаём агрегированные числа (close, change_pct, min, max, volatility), **не сырые свечи**.
-11. **Новости:** CryptoPanic, до 20 за 24h на монету, английский. Дедупликация по `external_id` (UNIQUE). Эмбеддим `title + " " + summary_text`. RAG: cosine top-5, исключая последние 24h (`vector_cosine_ops`, IVFFlat `lists=100`).
+11. **Новости:** CoinDesk Data News API (`GET https://data-api.coindesk.com/news/v1/article/list?lang=EN&categories=BTC&limit=20`), ключ в HTTP-заголовке `Authorization: Apikey <KEY>`. До 20 статей за 24h на монету, английский. Дедупликация по `external_id` (UNIQUE). Эмбеддим `title + " " + summary_text`. RAG: cosine top-5, исключая последние 24h (`vector_cosine_ops`, IVFFlat `lists=100`). Историческая справка: до 2026-04-01 источником был CryptoPanic (free Developer API закрылся).
 12. **NEWS-агент = 3 LLM-вызова:** (1) summary каждой новой новости, (2) повестка по всем 24h-summary, (3) финальный score после RAG по 5 историческим релевантным.
 13. **TRADER-агент:** строгий JSON-ответ `{"action": "BUY|SELL|HOLD", "buy_fraction": 0.0–1.0, "reasoning": "..."}`. При парс-ошибке — ретрай с пометкой.
 14. **Telegram:** двусторонний бот. Команды только от `telegram_id` из таблицы `users` — остальным `Not authorized`. Формат — Markdown + эмодзи (`📈 BUY`, `📉 SELL`, `⏸ HOLD`, `🪙`, `🔁`). Команды: `/start`, `/balance`, `/history [N]`, `/stats`, `/start_pipeline`, `/stop`, `/resume`.
@@ -87,7 +87,7 @@ alembic/  docs/  scripts/  tests/
 ```
 1. asyncio.gather:
    PRICE branch:                    NEWS branch:
-     fetch klines per timeframe       fetch CryptoPanic posts (24h)
+     fetch klines per timeframe       fetch CoinDesk Data articles (24h)
      aggregate metrics                для новых: NEWS summary + embedding → save_news
      PRICE-agent → price_summary     NEWS agenda (по всем 24h summary)
                                      RAG: cosine top-5 (exclude last 24h)
@@ -113,7 +113,7 @@ alembic/  docs/  scripts/  tests/
 2. Binance клиент + mock-биржа + таймфрейм-агрегация. Тесты комиссий, lot/notional.
 3. `scripts/init_user.py` (RUB→USDT, создание users + wallets).
 4. LLM-сервис + `LLMCallTracker` + ретраи + таймауты + `embeddings`. Тесты с `FakeOpenRouterClient`.
-5. CryptoPanic + дедуп + сохранение новости с эмбеддингом + RAG-запрос.
+5. CoinDesk Data News API + дедуп + сохранение новости с эмбеддингом + RAG-запрос.
 6. Агенты (PRICE, NEWS×3, TRADER) + промпты + парсинг JSON.
 7. Pipeline (crypto_step + runner) + таймауты на шаг.
 8. Scheduler (cron/interval) + защита от перекрытий + флаг `paused` в БД.

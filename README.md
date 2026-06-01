@@ -18,7 +18,7 @@ BUY / SELL / HOLD по `BTCUSDT`, `ETHUSDT`, `TONUSDT` и исполняет **m
   `telegram_id` (получить у [@userinfobot](https://t.me/userinfobot)).
 * API-ключи для:
   * [OpenRouter](https://openrouter.ai/) — LLM + embeddings.
-  * [CryptoPanic](https://cryptopanic.com/developers/api/) — новости.
+  * [CoinDesk Data](https://data.coindesk.com/) — новости (бывший CryptoCompare, free-план есть).
 
 Binance public API ключей **не требует**.
 
@@ -29,7 +29,7 @@ Binance public API ключей **не требует**.
 ```bash
 # 1) Конфиг
 cp .env.example .env
-# отредактируй .env: DB_PASSWORD, OPENROUTER_API_KEY, CRYPTOPANIC_API_KEY,
+# отредактируй .env: DB_PASSWORD, OPENROUTER_API_KEY, COINDESK_API_KEY,
 # TELEGRAM_BOT_TOKEN. Остальное можно оставить по умолчанию.
 
 # 2) Сборка и старт БД + приложения (alembic upgrade head запускается из
@@ -123,7 +123,7 @@ APScheduler tick → pipeline.runner
     crypto_step(asset):
       asyncio.gather(
         PRICE branch  →  klines × таймфреймы → PriceAgent,
-        NEWS  branch  →  CryptoPanic → NewsAgent×3 (+ RAG по pgvector),
+        NEWS  branch  →  CoinDesk Data → NewsAgent×3 (+ RAG по pgvector),
       )
       TraderAgent → решение (JSON)
       mock_exchange.execute (если BUY/SELL) — учёт спреда (bookTicker) и
