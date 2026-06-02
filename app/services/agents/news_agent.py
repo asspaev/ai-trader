@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Protocol, Sequence
 
 from loguru import logger
@@ -131,6 +132,7 @@ class NewsAgent:
             asset=post.asset,
             title=post.title,
             body=(post.raw_text or "").strip() or "(тело не получено от источника)",
+            published_at=format_published_at(post.published_at),
         )
         response = await self._llm.chat_completion(
             agent_name=AGENT_NAMES["summary"],
@@ -325,11 +327,17 @@ def parse_news_final_score(content: str) -> NewsFinalScore:
 
 
 def format_summaries_block(summaries: Sequence[SummarizedPost]) -> str:
-    """``[1] (bullish) <summary>\\n[2] (neutral) <summary>``…"""
+    """``[1] 2026-06-02 14:35 UTC (bullish) <summary>\\n…``
+
+    Дата публикации каждой новости включается в строку, чтобы NEWS-агент
+    при построении повестки видел хронологию событий и мог расставлять
+    приоритеты (свежее событие важнее вышедшего в начале 24h-окна).
+    """
     lines: list[str] = []
     for idx, item in enumerate(summaries, start=1):
+        published = format_published_at(item.post.published_at)
         lines.append(
-            f"[{idx}] ({item.summary.sentiment.value}) "
+            f"[{idx}] {published} ({item.summary.sentiment.value}) "
             f"{item.summary.summary.strip()}"
         )
     return "\n".join(lines)
@@ -355,12 +363,27 @@ def format_history_block(history: Sequence[News]) -> str:
 
     lines: list[str] = []
     for idx, item in enumerate(history, start=1):
-        published = item.published_at.strftime("%Y-%m-%d %H:%M UTC")
+        published = format_published_at(item.published_at)
         summary = (item.summary_text or item.title or "").strip()
         if len(summary) > 600:
             summary = summary[:600].rstrip() + "…"
         lines.append(f"[{idx}] {published} | {item.title.strip()}\n    {summary}")
     return "\n".join(lines)
+
+
+def format_published_at(value: datetime) -> str:
+    """Единый формат даты публикации новости для всех промптов NEWS-агента.
+
+    Используем UTC c минутной точностью: для трейдингового анализа
+    важна не секунда, а час события. Tz-naive значение трактуем как UTC
+    (страховка для исторических записей до миграции 0006, если такие
+    окажутся без timezone после round-trip через драйвер БД).
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%d %H:%M UTC")
 
 
 # ---------- internals ----------
@@ -404,6 +427,7 @@ __all__ = [
     "SummarizedPost",
     "format_agenda_block",
     "format_history_block",
+    "format_published_at",
     "format_summaries_block",
     "parse_news_agenda",
     "parse_news_final_score",

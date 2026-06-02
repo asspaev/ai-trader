@@ -16,6 +16,7 @@ from app.services.agents.news_agent import (
     SummarizedPost,
     format_agenda_block,
     format_history_block,
+    format_published_at,
     format_summaries_block,
     parse_news_agenda,
     parse_news_final_score,
@@ -164,8 +165,10 @@ def test_format_summaries_block_numbers_lines() -> None:
     ]
     block = format_summaries_block(summaries)
     lines = block.splitlines()
-    assert lines[0].startswith("[1] (bullish)")
-    assert lines[1].startswith("[2] (bearish)")
+    # Формат: ``[idx] YYYY-MM-DD HH:MM UTC (sentiment) <summary>`` — дата
+    # обязательна, чтобы агент видел хронологию событий за 24h-окно.
+    assert lines[0].startswith("[1] 2026-01-01 12:00 UTC (bullish)")
+    assert lines[1].startswith("[2] 2026-01-01 12:00 UTC (bearish)")
 
 
 def test_format_agenda_block_includes_topics_and_digest() -> None:
@@ -212,6 +215,44 @@ async def test_news_agent_summarize_post_routes_to_summary_agent_name() -> None:
     result = await agent.summarize_post(_post())
     assert result.summary == "Краткое содержание."
     assert fake.chat_calls[0]["agent_name"] == "news_summary"
+
+
+async def test_news_agent_summarize_post_passes_published_at_to_prompt() -> None:
+    """Дата публикации должна попасть в user-сообщение промпта.
+
+    Без этого NEWS-агент не отличает свежее событие от вчерашнего и
+    может оценивать «старое-как-новое».
+    """
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"summary": "Краткое содержание.", "sentiment": "neutral"})
+        ]
+    )
+    agent = NewsAgent(fake, model="test-model")
+    await agent.summarize_post(_post())
+    user_msg = fake.chat_calls[0]["messages"][-1]["content"]
+    assert "2026-01-01 12:00 UTC" in user_msg
+
+
+# ---------- format_published_at ----------
+
+
+def test_format_published_at_keeps_utc_for_aware_value() -> None:
+    value = datetime(2026, 6, 2, 14, 35, tzinfo=timezone.utc)
+    assert format_published_at(value) == "2026-06-02 14:35 UTC"
+
+
+def test_format_published_at_converts_non_utc_aware_to_utc() -> None:
+    from datetime import timedelta
+
+    tz_plus3 = timezone(timedelta(hours=3))
+    value = datetime(2026, 6, 2, 17, 35, tzinfo=tz_plus3)
+    assert format_published_at(value) == "2026-06-02 14:35 UTC"
+
+
+def test_format_published_at_treats_naive_as_utc() -> None:
+    value = datetime(2026, 6, 2, 14, 35)
+    assert format_published_at(value) == "2026-06-02 14:35 UTC"
 
 
 async def test_news_agent_build_agenda_returns_empty_without_llm_call() -> None:

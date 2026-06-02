@@ -440,15 +440,21 @@ async def call(agent_name, model, payload):
 
 ### 8.2 NEWS Agent (3 вызова)
 
+> **Дата публикации обязательно передаётся во все промпты, где фигурирует
+> конкретная новость.** Без неё агент не отличает свежее событие от
+> вчерашнего и может оценивать «старое как новое». Единый формат —
+> `YYYY-MM-DD HH:MM UTC` (helper `format_published_at` в `news_agent.py`,
+> используется и в summaries-блоке, и в historical-блоке).
+
 1. **`news_summary.md`** — для КАЖДОЙ свежей новости (за 24h):
-   - вход: `title + raw_text`,
+   - вход: `published_at + title + raw_text`,
    - выход: `summary_text` (краткое содержание + потенциальное влияние на цену), `sentiment ∈ {bullish, bearish, neutral}`.
    - Только для новых (не дублей по `external_id`).
 2. **`news_agenda.md`** — на всех summary за 24h:
-   - вход: список summary,
+   - вход: список `(published_at, sentiment, summary)` (хронология важна — позволяет агенту расставлять приоритеты внутри 24h-окна),
    - выход: 1–3 главных тематик («ETF approval», «regulation», …).
 3. **`news_final_score.md`** — после RAG (5 релевантных историч. новостей) + текущие 24h summary:
-   - вход: текущая повестка + 5 исторических summary + их sentiment + что было с ценой,
+   - вход: текущая повестка + 5 исторических summary (каждый с `published_at`) + их sentiment + что было с ценой,
    - выход: `news_score` (текст 4–8 предложений + общий sentiment).
 
 ### 8.3 EMBEDDING-сервис
