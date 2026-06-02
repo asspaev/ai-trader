@@ -205,10 +205,10 @@ COINDESK_NEWS_LIMIT_PER_CRYPTO=20
 TELEGRAM_BOT_TOKEN=
 
 # --- Scheduler ---
-SCHEDULER_MODE=cron               # cron | interval
-SCHEDULER_CRON_HOURS=0,6,12,18    # UTC, через запятую
+SCHEDULER_MODE=cron                          # cron | interval
+SCHEDULER_CRON_TIMES=00:00,06:00,12:00,18:00 # UTC, CSV из HH:MM
 SCHEDULER_INTERVAL_MINUTES=30
-SCHEDULER_RUN_ON_STARTUP=true     # для interval-режима
+SCHEDULER_RUN_ON_STARTUP=true                # для interval-режима
 
 # --- Trading ---
 TRADING_INITIAL_CAPITAL_RUB=100000
@@ -540,7 +540,18 @@ notify_pipeline_summary(pipeline_run_id) # после всех монет
 ## 10. Планировщик
 
 `SCHEDULER_MODE=cron`:
-- `AsyncIOScheduler.add_job(pipeline_runner, "cron", hour="0,6,12,18", timezone="UTC")`.
+- Расписание задаётся CSV из `HH:MM` в `SCHEDULER_CRON_TIMES`
+  (UTC, дефолт `00:00,06:00,12:00,18:00`). Поддерживаются любые
+  «час+минута»: `09:30,14:15,18:00`.
+- Внутри строится `OrTrigger` из набора `CronTrigger(hour=H, minute=M, timezone="UTC")`
+  — по одному на каждое время. Один `CronTrigger` с CSV-полями
+  `hour`/`minute` дал бы декартово произведение, нам же нужно
+  «9:30 ИЛИ 14:15».
+- Расписание можно перечитать на лету командой `/reload_schedule`
+  (см. §11). Под капотом — `PipelineScheduler.reload()`, которая
+  читает `.env` напрямую (минуя `os.environ`, потому что docker-compose
+  `env_file` запекает значения при старте контейнера). Файл `.env`
+  смонтирован в контейнер как `/app/.env:ro`.
 
 `SCHEDULER_MODE=interval`:
 - `AsyncIOScheduler.add_job(pipeline_runner, "interval", minutes=N)`.
@@ -563,6 +574,7 @@ notify_pipeline_summary(pipeline_run_id) # после всех монет
 | `/start_pipeline` | форс-запуск pipeline вне расписания |
 | `/stop` | гасит планировщик (флаг в БД, можно `/resume`) |
 | `/resume` | возобновляет планировщик |
+| `/reload_schedule` | перечитывает `SCHEDULER_*` из `.env` и перерегистрирует APScheduler-job (без рестарта контейнера) |
 
 Неавторизованным — `"Not authorized"` и игнор.
 

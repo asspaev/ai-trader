@@ -12,6 +12,8 @@
 * ``/start_pipeline`` — форс-запуск тика вне расписания (через
   :meth:`PipelineScheduler.trigger_now`).
 * ``/stop`` / ``/resume`` — переключение флага ``scheduler_state.paused``.
+* ``/reload_schedule`` — перечитать ``SCHEDULER_*`` из ``.env`` и
+  перерегистрировать APScheduler-job (через :meth:`PipelineScheduler.reload`).
 
 Авторизация реализована :class:`AuthMiddleware`: неавторизованным
 любым обращением отвечаем ``Not authorized`` и дальше handler не
@@ -143,7 +145,8 @@ class CommandHandlers:
             "• /stats — сводка по решениям\n"
             "• /start_pipeline — принудительно запустить тик\n"
             "• /stop — поставить планировщик на паузу\n"
-            "• /resume — возобновить планировщик"
+            "• /resume — возобновить планировщик\n"
+            "• /reload_schedule — перечитать расписание из .env"
         )
 
     # ----- /balance -----
@@ -247,6 +250,39 @@ class CommandHandlers:
         await self._deps.scheduler.resume()
         await message.answer("▶️ <b>Pipeline возобновлён.</b>")
 
+    # ----- /reload_schedule -----
+
+    async def on_reload_schedule(self, message: Message) -> None:
+        """Перечитать ``SCHEDULER_*`` из ``.env`` и перерегистрировать job.
+
+        Любая ошибка валидации (например, битый ``HH:MM`` в
+        ``SCHEDULER_CRON_TIMES``) не валит бота: текущий trigger
+        остаётся прежним, а пользователь получает понятное сообщение
+        с типом и текстом исключения.
+        """
+        try:
+            result = await self._deps.scheduler.reload()
+        except Exception as exc:  # noqa: BLE001 — отдаём пользователю что угодно
+            self._log.exception("Failed to reload scheduler config")
+            await message.answer(
+                "⚠️ <b>Не удалось перечитать расписание:</b>\n"
+                f"<code>{_esc(type(exc).__name__)}: {_esc(exc)}</code>\n"
+                "<i>Действующее расписание не изменилось.</i>"
+            )
+            return
+
+        lines = [
+            "🔄 <b>Расписание перечитано</b>",
+            _SEPARATOR,
+            f"Было: <code>{_esc(result.old_description)}</code>",
+            f"Стало: <code>{_esc(result.new_description)}</code>",
+        ]
+        if result.next_run is not None:
+            lines.append(
+                f"Следующий тик: <code>{_esc(_fmt_timestamp(result.next_run))}</code>"
+            )
+        await message.answer("\n".join(lines))
+
     # ----- внутреннее -----
 
     def _parse_history_limit(self, raw: str | None) -> int:
@@ -338,6 +374,7 @@ def build_router(deps: HandlerDeps) -> Router:
     router.message.register(handlers.on_start_pipeline, Command("start_pipeline"))
     router.message.register(handlers.on_stop, Command("stop"))
     router.message.register(handlers.on_resume, Command("resume"))
+    router.message.register(handlers.on_reload_schedule, Command("reload_schedule"))
 
     # Все прочие сообщения от авторизованного пользователя — мягко игнорим.
     @router.message(F.text)
@@ -345,7 +382,7 @@ def build_router(deps: HandlerDeps) -> Router:
         await message.answer(
             "🤔 <i>Не понял команду.</i>\n"
             "<b>Доступно:</b> /balance, /history, /stats, "
-            "/start_pipeline, /stop, /resume."
+            "/start_pipeline, /stop, /resume, /reload_schedule."
         )
 
     return router

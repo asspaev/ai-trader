@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -29,6 +32,7 @@ from app.config import SchedulerSettings
 from app.services.pipeline.scheduler import (
     PIPELINE_JOB_ID,
     PipelineScheduler,
+    ReloadResult,
 )
 
 
@@ -61,7 +65,7 @@ def _make_scheduler(
     *,
     session_factory: async_sessionmaker,
     mode: str = "cron",
-    cron_hours: str = "0,6,12,18",
+    cron_times: str = "00:00,06:00,12:00,18:00",
     interval_minutes: int = 30,
     run_on_startup: bool = True,
 ) -> tuple[PipelineScheduler, _CountingRunner]:
@@ -69,7 +73,7 @@ def _make_scheduler(
     runner = _CountingRunner()
     config = SchedulerSettings(
         mode=mode,
-        cron_hours=cron_hours,
+        cron_times=cron_times,
         interval_minutes=interval_minutes,
         run_on_startup=run_on_startup,
     )
@@ -84,14 +88,29 @@ def _make_scheduler(
 # ---------- _build_trigger ----------
 
 
-async def test_build_trigger_cron_returns_cron_trigger_in_utc(session_factory) -> None:
+async def test_build_trigger_cron_returns_or_trigger_in_utc(session_factory) -> None:
+    """cron-режим всегда отдаёт OrTrigger из CronTrigger'ов с UTC-таймзоной."""
     sch, _ = _make_scheduler(
-        session_factory=session_factory, mode="cron", cron_hours="0,12"
+        session_factory=session_factory, mode="cron", cron_times="00:00,12:30"
     )
     trigger = sch._build_trigger()
-    assert isinstance(trigger, CronTrigger)
-    # TZ должен быть UTC — иначе расписание поедет в локальной зоне.
-    assert "UTC" in str(trigger.timezone)
+    assert isinstance(trigger, OrTrigger)
+    assert len(trigger.triggers) == 2
+    for sub in trigger.triggers:
+        assert isinstance(sub, CronTrigger)
+        # TZ должен быть UTC — иначе расписание поедет в локальной зоне.
+        assert "UTC" in str(sub.timezone)
+
+
+async def test_build_trigger_cron_single_time_still_or_trigger(session_factory) -> None:
+    """Даже одна пара ``HH:MM`` оборачивается в OrTrigger для единообразия."""
+    sch, _ = _make_scheduler(
+        session_factory=session_factory, mode="cron", cron_times="09:30"
+    )
+    trigger = sch._build_trigger()
+    assert isinstance(trigger, OrTrigger)
+    assert len(trigger.triggers) == 1
+    assert isinstance(trigger.triggers[0], CronTrigger)
 
 
 async def test_build_trigger_interval_uses_configured_minutes(session_factory) -> None:
@@ -192,7 +211,7 @@ async def test_start_registers_job_with_overlap_protection(session_factory) -> N
         assert job is not None
         assert job.max_instances == 1
         assert job.coalesce is True
-        assert isinstance(job.trigger, CronTrigger)
+        assert isinstance(job.trigger, OrTrigger)
     finally:
         await sch.shutdown(wait=False)
 
@@ -299,3 +318,127 @@ async def test_pipeline_runner_protocol_accepts_plain_async_callable(
         config=config,
     )
     assert sch is not None
+
+
+# ---------- reload() ----------
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def _isolated_env_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Чистая CWD с пустым ``.env`` и без ``SCHEDULER_*`` в окружении.
+
+    Делает reload-тесты воспроизводимыми независимо от .env репозитория и
+    переменных окружения dev-машины.
+    """
+    monkeypatch.chdir(tmp_path)
+    for key in [k for k in os.environ if k.startswith("SCHEDULER_")]:
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    return tmp_path
+
+
+async def test_reload_picks_up_new_times_from_env_file(
+    session_factory, _isolated_env_dir: Path
+) -> None:
+    """Меняем ``.env`` → ``reload`` подхватывает новое расписание."""
+    (_isolated_env_dir / ".env").write_text(
+        "SCHEDULER_MODE=cron\nSCHEDULER_CRON_TIMES=00:00,12:00\n",
+        encoding="utf-8",
+    )
+    sch, _ = _make_scheduler(
+        session_factory=session_factory, mode="cron", cron_times="06:00"
+    )
+    try:
+        sch.start()
+
+        (_isolated_env_dir / ".env").write_text(
+            "SCHEDULER_MODE=cron\nSCHEDULER_CRON_TIMES=03:00,09:30,21:00\n",
+            encoding="utf-8",
+        )
+        result = await sch.reload()
+
+        assert isinstance(result, ReloadResult)
+        assert sch.config.cron_times == "03:00,09:30,21:00"
+        job = sch.scheduler.get_job(PIPELINE_JOB_ID)
+        assert job is not None
+        assert isinstance(job.trigger, OrTrigger)
+        assert len(job.trigger.triggers) == 3
+        assert "03:00" in result.new_description
+        assert "09:30" in result.new_description
+        assert "21:00" in result.new_description
+    finally:
+        await sch.shutdown(wait=False)
+
+
+async def test_reload_can_switch_mode_cron_to_interval(
+    session_factory, _isolated_env_dir: Path
+) -> None:
+    """Через ``.env`` можно переключить режим cron → interval."""
+    (_isolated_env_dir / ".env").write_text(
+        "SCHEDULER_MODE=interval\nSCHEDULER_INTERVAL_MINUTES=15\n",
+        encoding="utf-8",
+    )
+    sch, _ = _make_scheduler(
+        session_factory=session_factory, mode="cron", cron_times="00:00"
+    )
+    try:
+        sch.start()
+        result = await sch.reload()
+
+        assert sch.config.mode == "interval"
+        assert sch.config.interval_minutes == 15
+        job = sch.scheduler.get_job(PIPELINE_JOB_ID)
+        assert job is not None
+        assert isinstance(job.trigger, IntervalTrigger)
+        assert "interval" in result.new_description
+    finally:
+        await sch.shutdown(wait=False)
+
+
+async def test_reload_propagates_validation_error_and_keeps_old_trigger(
+    session_factory, _isolated_env_dir: Path
+) -> None:
+    """Битый ``.env`` → reload бросает исключение, старый trigger жив."""
+    (_isolated_env_dir / ".env").write_text(
+        "SCHEDULER_MODE=cron\nSCHEDULER_CRON_TIMES=99:99\n",
+        encoding="utf-8",
+    )
+    sch, _ = _make_scheduler(
+        session_factory=session_factory, mode="cron", cron_times="06:00"
+    )
+    try:
+        sch.start()
+        with pytest.raises(Exception):
+            await sch.reload()
+
+        # Старый trigger по-прежнему зарегистрирован.
+        job = sch.scheduler.get_job(PIPELINE_JOB_ID)
+        assert job is not None
+        assert isinstance(job.trigger, OrTrigger)
+    finally:
+        await sch.shutdown(wait=False)
+
+
+async def test_reload_ignores_stale_os_environ_value(
+    session_factory, _isolated_env_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """В Docker .env запекается в os.environ при старте; reload должен
+    предпочесть текущий файл, а не запечённое значение."""
+    monkeypatch.setenv("SCHEDULER_MODE", "cron")
+    monkeypatch.setenv("SCHEDULER_CRON_TIMES", "06:00")  # «запечённое» из контейнера
+    (_isolated_env_dir / ".env").write_text(
+        "SCHEDULER_MODE=cron\nSCHEDULER_CRON_TIMES=00:00,12:00,18:00\n",
+        encoding="utf-8",
+    )
+    sch, _ = _make_scheduler(
+        session_factory=session_factory, mode="cron", cron_times="06:00"
+    )
+    try:
+        sch.start()
+        await sch.reload()
+        assert sch.config.cron_times == "00:00,12:00,18:00"
+
+        # os.environ остался нетронутым после reload — backup восстановился.
+        assert os.environ.get("SCHEDULER_CRON_TIMES") == "06:00"
+    finally:
+        await sch.shutdown(wait=False)

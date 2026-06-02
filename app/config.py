@@ -215,9 +215,9 @@ class TradingSettings(BaseSettings):
 class SchedulerSettings(BaseSettings):
     """Параметры APScheduler.
 
-    * ``mode='cron'`` — тики выполняются на каждый час из CSV
-      ``cron_hours`` (UTC). Дефолт ``"0,6,12,18"`` — 4 раза в сутки,
-      как описано в ``architecture.md`` §10.
+    * ``mode='cron'`` — тики выполняются в каждое время из CSV
+      ``cron_times`` (UTC). Формат каждого элемента — ``HH:MM``.
+      Дефолт ``"00:00,06:00,12:00,18:00"`` — 4 раза в сутки.
     * ``mode='interval'`` — тик каждые ``interval_minutes`` минут.
       При ``run_on_startup=true`` дополнительно делается один тик
       сразу после старта сервиса (полезно в dev/MVP-прогонах).
@@ -228,6 +228,11 @@ class SchedulerSettings(BaseSettings):
     срабатывания склеиваются в один. Флаг паузы между ``/stop`` и
     ``/resume`` живёт в БД (таблица ``scheduler_state``), а не здесь
     — он не относится к статической конфигурации.
+
+    Расписание можно перечитать на лету командой ``/reload_schedule``
+    (см. :meth:`PipelineScheduler.reload`) — это пересоздаёт
+    ``SchedulerSettings`` напрямую из файла ``.env``, минуя
+    ``os.environ`` (см. docstring у ``reload``).
     """
 
     model_config = SettingsConfigDict(
@@ -238,7 +243,7 @@ class SchedulerSettings(BaseSettings):
     )
 
     mode: str = "cron"
-    cron_hours: str = "0,6,12,18"
+    cron_times: str = "00:00,06:00,12:00,18:00"
     interval_minutes: int = 30
     run_on_startup: bool = True
 
@@ -255,28 +260,48 @@ class SchedulerSettings(BaseSettings):
             return normalized
         return value
 
-    @field_validator("cron_hours")
+    @field_validator("cron_times")
     @classmethod
-    def _validate_cron_hours(cls, value: str) -> str:
-        """Проверить, что CSV состоит из чисел 0..23."""
+    def _validate_cron_times(cls, value: str) -> str:
+        """Проверить, что CSV состоит из элементов вида ``HH:MM``.
+
+        Час должен быть 0..23, минута 0..59. Дубли и порядок не трогаем
+        — APScheduler корректно отрабатывает повторы (OrTrigger просто
+        фильтрует одинаковые next_run-моменты). Нормализуем формат к
+        ``HH:MM`` с ведущим нулём, чтобы лог расписания был предсказуемым.
+        """
         cleaned: list[str] = []
         for part in value.split(","):
             item = part.strip()
             if not item:
                 continue
+            if ":" not in item:
+                raise ValueError(
+                    "SCHEDULER_CRON_TIMES item must be in 'HH:MM' format, "
+                    f"got {item!r}"
+                )
+            hour_str, minute_str = item.split(":", 1)
             try:
-                hour = int(item)
+                hour = int(hour_str)
+                minute = int(minute_str)
             except ValueError as exc:
                 raise ValueError(
-                    f"SCHEDULER_CRON_HOURS contains non-integer item: {item!r}"
+                    "SCHEDULER_CRON_TIMES item must be in 'HH:MM' format with "
+                    f"integer parts, got {item!r}"
                 ) from exc
             if not 0 <= hour <= 23:
                 raise ValueError(
-                    f"SCHEDULER_CRON_HOURS hour out of range 0..23: {hour}"
+                    f"SCHEDULER_CRON_TIMES hour out of range 0..23: {hour}"
                 )
-            cleaned.append(str(hour))
+            if not 0 <= minute <= 59:
+                raise ValueError(
+                    f"SCHEDULER_CRON_TIMES minute out of range 0..59: {minute}"
+                )
+            cleaned.append(f"{hour:02d}:{minute:02d}")
         if not cleaned:
-            raise ValueError("SCHEDULER_CRON_HOURS must contain at least one hour")
+            raise ValueError(
+                "SCHEDULER_CRON_TIMES must contain at least one 'HH:MM' entry"
+            )
         return ",".join(cleaned)
 
     @field_validator("interval_minutes")
@@ -287,6 +312,21 @@ class SchedulerSettings(BaseSettings):
                 f"SCHEDULER_INTERVAL_MINUTES must be positive, got {value}"
             )
         return value
+
+    def cron_pairs(self) -> tuple[tuple[int, int], ...]:
+        """Распарсить ``cron_times`` в кортеж пар ``(hour, minute)``.
+
+        Используется ``PipelineScheduler._build_trigger`` для сборки
+        :class:`OrTrigger` из набора :class:`CronTrigger`.
+        """
+        pairs: list[tuple[int, int]] = []
+        for item in self.cron_times.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            hour_str, minute_str = item.split(":", 1)
+            pairs.append((int(hour_str), int(minute_str)))
+        return tuple(pairs)
 
 
 class TelegramSettings(BaseSettings):

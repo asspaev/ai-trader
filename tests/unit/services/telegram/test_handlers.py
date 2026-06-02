@@ -416,3 +416,87 @@ async def test_stop_and_resume_toggle_pause_flag(session, session_factory) -> No
     await handlers.on_resume(msg_resume)
     assert await scheduler.is_paused() is False
     assert "▶️" in msg_resume.replies[0]
+
+
+# ---------- /reload_schedule ----------
+
+
+async def test_reload_schedule_reports_old_and_new(session, session_factory) -> None:
+    """Хендлер вызывает ``scheduler.reload`` и кладёт описание в ответ."""
+    from datetime import datetime, timezone
+
+    from app.services.pipeline.scheduler import ReloadResult
+
+    class _StubScheduler:
+        def __init__(self) -> None:
+            self.reload_calls = 0
+
+        async def reload(self) -> ReloadResult:
+            self.reload_calls += 1
+            return ReloadResult(
+                old_description="cron[UTC](06:00)",
+                new_description="cron[UTC](00:00, 12:00)",
+                next_run=datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc),
+            )
+
+    user_id = await _seed_user(session)
+    stub = _StubScheduler()
+    handlers, _ = await _build_handlers(
+        session_factory=session_factory,
+        user_id=user_id,
+        scheduler=stub,  # type: ignore[arg-type]
+    )
+
+    msg = FakeMessage(text="/reload_schedule", from_user_id=ALLOWED_TELEGRAM_ID)
+    await handlers.on_reload_schedule(msg)
+
+    assert stub.reload_calls == 1
+    text = _plain(msg.replies[0])
+    assert "Расписание перечитано" in text
+    assert "cron[UTC](06:00)" in text
+    assert "cron[UTC](00:00, 12:00)" in text
+    assert "2026-06-02 12:00Z" in text
+
+
+async def test_reload_schedule_reports_error_without_crashing(
+    session, session_factory
+) -> None:
+    """Битый ``.env`` → пользователь получает текст ошибки, бот живой."""
+
+    class _BrokenScheduler:
+        async def reload(self) -> None:
+            raise ValueError("SCHEDULER_CRON_TIMES item must be 'HH:MM'")
+
+    user_id = await _seed_user(session)
+    handlers, _ = await _build_handlers(
+        session_factory=session_factory,
+        user_id=user_id,
+        scheduler=_BrokenScheduler(),  # type: ignore[arg-type]
+    )
+
+    msg = FakeMessage(text="/reload_schedule", from_user_id=ALLOWED_TELEGRAM_ID)
+    await handlers.on_reload_schedule(msg)
+
+    text = _plain(msg.replies[0])
+    assert "Не удалось перечитать расписание" in text
+    assert "ValueError" in text
+    assert "Действующее расписание не изменилось" in text
+
+
+async def test_reload_schedule_rejected_for_foreign_user(
+    session, session_factory
+) -> None:
+    """``AuthMiddleware`` режет команду от чужого ``telegram_id``."""
+    mw = AuthMiddleware(ALLOWED_TELEGRAM_ID)
+    msg = FakeMessage(text="/reload_schedule", from_user_id=999)
+    called = {"hit": False}
+
+    async def handler(event: Any, data: dict[str, Any]) -> str:  # pragma: no cover
+        called["hit"] = True
+        return "ok"
+
+    result = await mw(handler, msg, {})
+
+    assert result is None
+    assert called["hit"] is False
+    assert msg.replies == ["Not authorized"]

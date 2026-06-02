@@ -28,6 +28,11 @@ services:
       - ./scripts:/app/scripts
       - ./alembic.ini:/app/alembic.ini
       - ./logs:/app/logs
+      # ./.env смонтирован read-only, чтобы /reload_schedule мог
+      # перечитать актуальные SCHEDULER_* (env_file выше инжектит .env
+      # в os.environ один раз при старте контейнера; для hot-reload
+      # нужен живой файл, см. PipelineScheduler.reload).
+      - ./.env:/app/.env:ro
 
 volumes:
   db_data:
