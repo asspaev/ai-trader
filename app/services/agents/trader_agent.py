@@ -16,39 +16,20 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Protocol, Sequence
-
-from loguru import logger
+from typing import Sequence
 
 from app.config import settings
 from app.models import Decision
 from app.models.enums import DecisionAction
 from app.services.agents.base import (
     AgentJSONParseError,
-    extract_assistant_content,
+    BaseAgent,
+    ChatLLM,
     parse_strict_json,
     render_prompt,
 )
 from app.services.agents.news_agent import NewsFinalScore
 from app.services.agents.price_agent import PriceSummary
-
-
-_MAX_PARSE_ATTEMPTS = 2
-
-
-class _ChatLLM(Protocol):
-    """Минимальный публичный контракт LLM-клиента (см. PriceAgent)."""
-
-    async def chat_completion(
-        self,
-        *,
-        agent_name: str,
-        model: str,
-        messages: list[dict],
-        pipeline_run_id: uuid.UUID | None = ...,
-        **extra,
-    ) -> dict:
-        ...  # pragma: no cover
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +63,7 @@ class TraderDecision:
     reasoning: str
 
 
-class TraderAgent:
+class TraderAgent(BaseAgent):
     """Тонкая обёртка над LLM для генерации :class:`TraderDecision`.
 
     Args:
@@ -94,16 +75,16 @@ class TraderAgent:
 
     AGENT_NAME = "trader"
     PROMPT = "trader_decision"
+    LOG_COMPONENT = "trader_agent"
 
     def __init__(
         self,
-        llm_client: _ChatLLM,
+        llm_client: ChatLLM,
         *,
         model: str | None = None,
         history_limit: int | None = None,
     ) -> None:
-        self._llm = llm_client
-        self._model = model or settings.agent.trader_model
+        super().__init__(llm_client, model=model or settings.agent.trader_model)
         self._history_limit = (
             history_limit
             if history_limit is not None
@@ -122,41 +103,20 @@ class TraderAgent:
     ) -> TraderDecision:
         """Запросить решение у LLM и распарсить ответ.
 
-        При первом битом JSON делаем второй вызов с «note» о том, что
-        предыдущий ответ был невалиден. Это локальный ретрай, в
-        отличие от транспортных ретраев :class:`OpenRouterClient`.
+        Парсинг-ретрай (до 2 попыток + reminder во втором сообщении)
+        реализован в :class:`BaseAgent`.
         """
         prompt = self._render_prompt(asset, wallet, price, news, history)
 
-        bound = logger.bind(
-            component="trader_agent",
-            asset=asset.upper(),
-            pipeline_run_id=str(pipeline_run_id) if pipeline_run_id else None,
+        return await self._chat_with_parse_retry(
+            agent_name=self.AGENT_NAME,
+            messages_factory=lambda prior_error: _build_messages(
+                prompt, prior_error=prior_error
+            ),
+            parser=parse_trader_decision,
+            pipeline_run_id=pipeline_run_id,
+            log_extra={"asset": asset.upper()},
         )
-
-        last_error: AgentJSONParseError | None = None
-        for attempt in range(1, _MAX_PARSE_ATTEMPTS + 1):
-            messages = _build_messages(prompt, prior_error=last_error)
-            response = await self._llm.chat_completion(
-                agent_name=self.AGENT_NAME,
-                model=self._model,
-                messages=messages,
-                pipeline_run_id=pipeline_run_id,
-            )
-            content = extract_assistant_content(response)
-            try:
-                return parse_trader_decision(content)
-            except AgentJSONParseError as exc:
-                last_error = exc
-                bound.warning(
-                    "Trader response failed parsing on attempt {attempt}/{total}: {msg}",
-                    attempt=attempt,
-                    total=_MAX_PARSE_ATTEMPTS,
-                    msg=str(exc),
-                )
-
-        assert last_error is not None
-        raise last_error
 
     # ---------- internals ----------
 

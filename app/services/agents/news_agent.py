@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from loguru import logger
 
@@ -26,8 +26,9 @@ from app.config import settings
 from app.models import News
 from app.services.agents.base import (
     AgentJSONParseError,
+    BaseAgent,
+    ChatLLM,
     Sentiment,
-    extract_assistant_content,
     parse_strict_json,
     render_prompt,
 )
@@ -39,21 +40,6 @@ AGENT_NAMES = {
     "agenda": "news_agenda",
     "final": "news_final_score",
 }
-
-
-class _ChatLLM(Protocol):
-    """Минимальный публичный контракт LLM-клиента (см. PriceAgent)."""
-
-    async def chat_completion(
-        self,
-        *,
-        agent_name: str,
-        model: str,
-        messages: list[dict],
-        pipeline_run_id: uuid.UUID | None = ...,
-        **extra,
-    ) -> dict:
-        ...  # pragma: no cover
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,17 +92,23 @@ class SummarizedPost:
     summary: NewsSummary
 
 
-class NewsAgent:
+class NewsAgent(BaseAgent):
     """Триада LLM-вызовов вокруг новостей одного актива.
+
+    Все три внутренних вызова идут через
+    :meth:`BaseAgent._chat_with_parse_retry`, поэтому при первом битом
+    JSON делается повторный вызов с reminder, и только потом —
+    :class:`AgentJSONParseError` наверх.
 
     Args:
         llm_client: LLM-клиент с методом ``chat_completion``.
         model: Имя модели; по умолчанию — ``settings.agent.news_model``.
     """
 
-    def __init__(self, llm_client: _ChatLLM, *, model: str | None = None) -> None:
-        self._llm = llm_client
-        self._model = model or settings.agent.news_model
+    LOG_COMPONENT = "news_agent"
+
+    def __init__(self, llm_client: ChatLLM, *, model: str | None = None) -> None:
+        super().__init__(llm_client, model=model or settings.agent.news_model)
 
     # ---------- step 1: per-post summary ----------
 
@@ -134,14 +126,15 @@ class NewsAgent:
             body=(post.raw_text or "").strip() or "(тело не получено от источника)",
             published_at=format_published_at(post.published_at),
         )
-        response = await self._llm.chat_completion(
+        return await self._chat_with_parse_retry(
             agent_name=AGENT_NAMES["summary"],
-            model=self._model,
-            messages=_build_messages(prompt),
+            messages_factory=lambda prior_error: _build_messages(
+                prompt, prior_error=prior_error
+            ),
+            parser=parse_news_summary,
             pipeline_run_id=pipeline_run_id,
+            log_extra={"asset": post.asset, "news_id": post.external_id},
         )
-        content = extract_assistant_content(response)
-        return parse_news_summary(content)
 
     # ---------- step 2: 24h agenda ----------
 
@@ -167,14 +160,15 @@ class NewsAgent:
             asset=asset.upper(),
             summaries_block=summaries_block,
         )
-        response = await self._llm.chat_completion(
+        return await self._chat_with_parse_retry(
             agent_name=AGENT_NAMES["agenda"],
-            model=self._model,
-            messages=_build_messages(prompt),
+            messages_factory=lambda prior_error: _build_messages(
+                prompt, prior_error=prior_error
+            ),
+            parser=parse_news_agenda,
             pipeline_run_id=pipeline_run_id,
+            log_extra={"asset": asset.upper()},
         )
-        content = extract_assistant_content(response)
-        return parse_news_agenda(content)
 
     # ---------- step 3: RAG-aware final score ----------
 
@@ -207,14 +201,15 @@ class NewsAgent:
             current_agenda_block=format_agenda_block(agenda),
             history_block=format_history_block(history),
         )
-        response = await self._llm.chat_completion(
+        return await self._chat_with_parse_retry(
             agent_name=AGENT_NAMES["final"],
-            model=self._model,
-            messages=_build_messages(prompt),
+            messages_factory=lambda prior_error: _build_messages(
+                prompt, prior_error=prior_error
+            ),
+            parser=parse_news_final_score,
             pipeline_run_id=pipeline_run_id,
+            log_extra={"asset": asset.upper()},
         )
-        content = extract_assistant_content(response)
-        return parse_news_final_score(content)
 
 
 # ---------- pure parsers ----------
@@ -404,17 +399,34 @@ def _empty_agenda(asset: str) -> NewsAgenda:
     return NewsAgenda(topics=tuple(), digest=digest)
 
 
-def _build_messages(prompt: str) -> list[dict]:
-    return [
+def _build_messages(
+    prompt: str, *, prior_error: AgentJSONParseError | None = None
+) -> list[dict]:
+    """Системный месседж + user; при ретрае добавляем reminder про формат."""
+    messages: list[dict] = [
         {
             "role": "system",
             "content": (
                 "Ты — финансовый аналитик. Без воды, без markdown в JSON, "
-                "без advisor-дисклеймеров."
+                "без advisor-дисклеймеров. Отвечай строго одним JSON-объектом "
+                "со всеми обязательными полями из инструкции."
             ),
         },
         {"role": "user", "content": prompt},
     ]
+    if prior_error is not None:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Предыдущий ответ не удалось распарсить как ожидаемый JSON. "
+                    f"Причина: {prior_error}. Верни строго один JSON-объект "
+                    "со всеми требуемыми полями, без какого-либо текста до или "
+                    "после, без блоков ```json```."
+                ),
+            }
+        )
+    return messages
 
 
 __all__ = [

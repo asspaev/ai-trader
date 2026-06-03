@@ -13,38 +13,18 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Iterable, Mapping, Protocol
-
-from loguru import logger
+from typing import Iterable, Mapping
 
 from app.config import settings
 from app.services.agents.base import (
     AgentJSONParseError,
+    BaseAgent,
+    ChatLLM,
     Sentiment,
-    extract_assistant_content,
     parse_strict_json,
     render_prompt,
 )
 from app.services.binance.prices import TIMEFRAMES, PriceMetrics
-
-
-class _ChatLLM(Protocol):
-    """Минимальный публичный контракт LLM-клиента для агентов.
-
-    Эта же сигнатура реализована :class:`OpenRouterClient` и
-    :class:`FakeOpenRouterClient` из тестов.
-    """
-
-    async def chat_completion(
-        self,
-        *,
-        agent_name: str,
-        model: str,
-        messages: list[dict],
-        pipeline_run_id: uuid.UUID | None = ...,
-        **extra,
-    ) -> dict:
-        ...  # pragma: no cover — structural Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,22 +40,22 @@ class PriceSummary:
     sentiment: Sentiment
 
 
-class PriceAgent:
+class PriceAgent(BaseAgent):
     """Тонкая обёртка над LLM для генерации :class:`PriceSummary`.
 
     Args:
         llm_client: Любой объект с методом ``chat_completion`` (см.
-            :class:`_ChatLLM`). В production — :class:`OpenRouterClient`.
+            :class:`ChatLLM`). В production — :class:`OpenRouterClient`.
         model: Имя модели для OpenRouter; по умолчанию —
             ``settings.agent.price_model``.
     """
 
     AGENT_NAME = "price"
     PROMPT = "price_summary"
+    LOG_COMPONENT = "price_agent"
 
-    def __init__(self, llm_client: _ChatLLM, *, model: str | None = None) -> None:
-        self._llm = llm_client
-        self._model = model or settings.agent.price_model
+    def __init__(self, llm_client: ChatLLM, *, model: str | None = None) -> None:
+        super().__init__(llm_client, model=model or settings.agent.price_model)
 
     async def run(
         self,
@@ -107,15 +87,15 @@ class PriceAgent:
             metrics_block=metrics_block,
         )
 
-        response = await self._llm.chat_completion(
+        return await self._chat_with_parse_retry(
             agent_name=self.AGENT_NAME,
-            model=self._model,
-            messages=_build_messages(prompt),
+            messages_factory=lambda prior_error: _build_messages(
+                prompt, prior_error=prior_error
+            ),
+            parser=parse_price_summary,
             pipeline_run_id=pipeline_run_id,
+            log_extra={"asset": asset.upper()},
         )
-
-        content = extract_assistant_content(response)
-        return parse_price_summary(content)
 
 
 # ---------- pure helpers (выделены для юнит-тестов) ----------
@@ -198,18 +178,35 @@ def _fmt_optional(value: Decimal | None, *, places: int = 8) -> str:
     return _fmt_decimal(value, places=places) if value is not None else "n/a"
 
 
-def _build_messages(prompt: str) -> list[dict]:
-    """Системный месседж + user — общий для всех агентов."""
-    return [
+def _build_messages(
+    prompt: str, *, prior_error: AgentJSONParseError | None = None
+) -> list[dict]:
+    """Системный месседж + user; при ретрае — reminder про формат."""
+    messages: list[dict] = [
         {
             "role": "system",
             "content": (
                 "Ты — финансовый аналитик. Без воды, без markdown в JSON, "
-                "без advisor-дисклеймеров."
+                "без advisor-дисклеймеров. Отвечай строго одним JSON-объектом "
+                'со всеми полями ("summary" и "sentiment").'
             ),
         },
         {"role": "user", "content": prompt},
     ]
+    if prior_error is not None:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Предыдущий ответ не удалось распарсить как ожидаемый JSON. "
+                    f"Причина: {prior_error}. Верни строго один JSON-объект с "
+                    'обязательными полями "summary" (строка) и "sentiment" '
+                    '("bullish" | "bearish" | "neutral"), без какого-либо текста '
+                    "до или после, без блоков ```json```."
+                ),
+            }
+        )
+    return messages
 
 
 def metrics_as_iterable(metrics: Mapping[str, PriceMetrics]) -> Iterable[PriceMetrics]:

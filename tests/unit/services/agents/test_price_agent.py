@@ -138,3 +138,46 @@ async def test_price_agent_run_requires_metrics() -> None:
         await agent.run(asset="BTC", metrics={})
     # LLM не должен быть вызван
     assert fake.chat_calls == []
+
+
+async def test_price_agent_run_retries_on_missing_sentiment_then_succeeds() -> None:
+    """Первый ответ без ``sentiment`` → повтор с reminder → распарсили."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"summary": "Только сводка, без sentiment."}),
+            chat_response(
+                {
+                    "summary": "Полный ответ во второй попытке.",
+                    "sentiment": "neutral",
+                }
+            ),
+        ]
+    )
+    agent = PriceAgent(fake, model="test-model")
+
+    result = await agent.run(asset="BTC", metrics={"1h": _metrics("1h")})
+
+    assert result.sentiment is Sentiment.NEUTRAL
+    assert "Полный ответ" in result.summary
+    assert len(fake.chat_calls) == 2
+
+    # Второй вызов должен содержать reminder про невалидный JSON.
+    second_msgs = fake.chat_calls[1]["messages"]
+    reminder = second_msgs[-1]["content"]
+    assert "распарсить" in reminder.lower()
+
+
+async def test_price_agent_run_raises_after_two_failed_parses() -> None:
+    """Два битых ответа подряд → AgentJSONParseError наверх."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"summary": "no sentiment 1"}),
+            chat_response({"summary": "no sentiment 2"}),
+        ]
+    )
+    agent = PriceAgent(fake, model="test-model")
+
+    with pytest.raises(AgentJSONParseError):
+        await agent.run(asset="BTC", metrics={"1h": _metrics("1h")})
+
+    assert len(fake.chat_calls) == 2

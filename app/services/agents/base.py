@@ -23,13 +23,20 @@ from __future__ import annotations
 import enum
 import json
 import re
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from string import Template
-from typing import Any
+from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
+
+from loguru import logger
 
 
 PROMPTS_DIR: Path = Path(__file__).resolve().parent / "prompts"
+
+T = TypeVar("T")
+MessagesFactory = Callable[["AgentJSONParseError | None"], list[dict]]
+ContentParser = Callable[[str], T]
 
 
 class AgentError(RuntimeError):
@@ -196,9 +203,124 @@ def parse_strict_json(content: str) -> dict[str, Any]:
     return parsed
 
 
+class ChatLLM(Protocol):
+    """Минимальный публичный контракт LLM-клиента для агентов.
+
+    Реализуется :class:`OpenRouterClient` и тестовым
+    :class:`FakeOpenRouterClient`. Поднят в :mod:`base`, чтобы все
+    агенты импортировали один и тот же тип, а не дублировали
+    Protocol в каждом модуле.
+    """
+
+    async def chat_completion(
+        self,
+        *,
+        agent_name: str,
+        model: str,
+        messages: list[dict],
+        pipeline_run_id: uuid.UUID | None = ...,
+        **extra: Any,
+    ) -> dict:
+        ...  # pragma: no cover — structural Protocol
+
+
+class BaseAgent:
+    """Общий предок LLM-агентов: владение моделью + локальный парсинг-ретрай.
+
+    Каждый агент-наследник вызывает :meth:`_chat_with_parse_retry`,
+    передавая фабрику сообщений и парсер ответа. Базовый класс делает
+    до :attr:`MAX_PARSE_ATTEMPTS` попыток: при первом провале парсинга
+    второй вызов идёт с тем же ``messages_factory``, но с переданным в
+    него ``prior_error`` — агент сам решает, добавить ли в промпт
+    reminder про предыдущую ошибку.
+
+    Если все попытки провалились — поднимаем последний
+    :class:`AgentJSONParseError`. Pipeline пометит шаг как
+    ``executed=False`` + ``not_executed_reason="LLM_PARSE_FAILED"``.
+
+    Attributes:
+        MAX_PARSE_ATTEMPTS: Сколько раз пробуем распарсить ответ.
+            Меняется через override в наследниках (но обычно 2 хватает).
+        LOG_COMPONENT: Имя компонента для ``logger.bind(component=...)``.
+            Наследник переопределяет, чтобы логи были различимы по агенту.
+    """
+
+    MAX_PARSE_ATTEMPTS: int = 2
+    LOG_COMPONENT: str = "agent"
+
+    def __init__(self, llm_client: ChatLLM, *, model: str) -> None:
+        self._llm = llm_client
+        self._model = model
+
+    async def _chat_with_parse_retry(
+        self,
+        *,
+        agent_name: str,
+        messages_factory: MessagesFactory,
+        parser: ContentParser[T],
+        pipeline_run_id: uuid.UUID | None = None,
+        log_extra: Mapping[str, Any] | None = None,
+    ) -> T:
+        """Выполнить LLM-вызов и распарсить ответ с ретраем при парс-ошибке.
+
+        Args:
+            agent_name: Имя для записи в ``llm_calls.agent_name``.
+                У NewsAgent три разных значения (`news_summary`,
+                `news_agenda`, `news_final_score`) — поэтому параметр
+                на каждый вызов, а не атрибут класса.
+            messages_factory: Фабрика, которая по ``prior_error``
+                (``None`` на первой попытке) возвращает финальный список
+                ``messages``. Reminder при ретрае собирает сам агент —
+                базовый класс не знает специфики формата.
+            parser: Функция, превращающая ``content`` ответа в результат
+                агента. Должна бросать :class:`AgentJSONParseError` при
+                невалидном/неполном JSON.
+            pipeline_run_id: Прокидывается в LLM-клиент для трекинга.
+            log_extra: Дополнительные поля для ``logger.bind`` (обычно
+                ``{"asset": "BTC"}``).
+
+        Returns:
+            Результат ``parser(content)`` первой удачной попытки.
+        """
+        bound = logger.bind(
+            component=self.LOG_COMPONENT,
+            agent=agent_name,
+            pipeline_run_id=str(pipeline_run_id) if pipeline_run_id else None,
+            **(dict(log_extra) if log_extra else {}),
+        )
+
+        last_error: AgentJSONParseError | None = None
+        for attempt in range(1, self.MAX_PARSE_ATTEMPTS + 1):
+            response = await self._llm.chat_completion(
+                agent_name=agent_name,
+                model=self._model,
+                messages=messages_factory(last_error),
+                pipeline_run_id=pipeline_run_id,
+            )
+            content = extract_assistant_content(response)
+            try:
+                return parser(content)
+            except AgentJSONParseError as exc:
+                last_error = exc
+                bound.warning(
+                    "{agent} response failed parsing on attempt {attempt}/{total}: {msg}",
+                    agent=agent_name,
+                    attempt=attempt,
+                    total=self.MAX_PARSE_ATTEMPTS,
+                    msg=str(exc),
+                )
+
+        assert last_error is not None
+        raise last_error
+
+
 __all__ = [
     "AgentError",
     "AgentJSONParseError",
+    "BaseAgent",
+    "ChatLLM",
+    "ContentParser",
+    "MessagesFactory",
     "PROMPTS_DIR",
     "Sentiment",
     "extract_assistant_content",

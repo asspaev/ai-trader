@@ -7,11 +7,15 @@ import pytest
 from app.services.agents.base import (
     AgentError,
     AgentJSONParseError,
+    BaseAgent,
     Sentiment,
     extract_assistant_content,
     parse_strict_json,
     render_prompt,
 )
+
+from tests.unit.services.agents._helpers import chat_response
+from tests.unit.services.llm._helpers import FakeOpenRouterClient
 
 
 # Все тесты модуля синхронные — asyncio-маркер не нужен.
@@ -120,3 +124,96 @@ def test_agent_json_parse_error_is_picklable() -> None:
     assert isinstance(restored, AgentJSONParseError)
     assert str(restored) == str(err)
     assert restored.raw_content == "<<<"
+
+
+# ---------- BaseAgent._chat_with_parse_retry ----------
+
+
+def _parse_required_field(content: str) -> dict:
+    """Тестовый парсер: требует ``{"value": <str>}`` иначе AgentJSONParseError."""
+    data = parse_strict_json(content)
+    value = data.get("value")
+    if not isinstance(value, str):
+        raise AgentJSONParseError(
+            "value must be a string",
+            raw_content=content,
+        )
+    return {"value": value}
+
+
+def _msg_factory(prompt: str):
+    """Фабрика messages: на первой попытке — голый prompt, на второй —
+    дополнительная reminder-строка с текстом предыдущей ошибки."""
+
+    def build(prior_error: AgentJSONParseError | None) -> list[dict]:
+        messages: list[dict] = [{"role": "user", "content": prompt}]
+        if prior_error is not None:
+            messages.append({"role": "user", "content": f"retry: {prior_error}"})
+        return messages
+
+    return build
+
+
+async def test_base_agent_retries_on_parse_error_then_succeeds() -> None:
+    """Первый ответ не парсится → второй проходит. Reminder попадает во второй вызов."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"wrong": "shape"}),
+            chat_response({"value": "ok"}),
+        ]
+    )
+    agent = BaseAgent(fake, model="test-model")
+
+    result = await agent._chat_with_parse_retry(
+        agent_name="dummy",
+        messages_factory=_msg_factory("prompt"),
+        parser=_parse_required_field,
+    )
+
+    assert result == {"value": "ok"}
+    assert len(fake.chat_calls) == 2
+    # Во втором вызове должен быть reminder с текстом ошибки.
+    second_messages = fake.chat_calls[1]["messages"]
+    assert any("retry:" in m["content"] for m in second_messages)
+
+
+async def test_base_agent_raises_after_all_attempts_fail() -> None:
+    """Два битых ответа подряд → AgentJSONParseError наверх."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"wrong": "1"}),
+            chat_response({"wrong": "2"}),
+        ]
+    )
+    agent = BaseAgent(fake, model="test-model")
+
+    with pytest.raises(AgentJSONParseError):
+        await agent._chat_with_parse_retry(
+            agent_name="dummy",
+            messages_factory=_msg_factory("prompt"),
+            parser=_parse_required_field,
+        )
+
+    assert len(fake.chat_calls) == BaseAgent.MAX_PARSE_ATTEMPTS
+
+
+async def test_base_agent_returns_on_first_success_without_retry() -> None:
+    """Успех на первой попытке — второго вызова быть не должно."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"value": "first"}),
+        ]
+    )
+    agent = BaseAgent(fake, model="test-model")
+
+    result = await agent._chat_with_parse_retry(
+        agent_name="dummy",
+        messages_factory=_msg_factory("prompt"),
+        parser=_parse_required_field,
+    )
+
+    assert result == {"value": "first"}
+    assert len(fake.chat_calls) == 1
+    # На первой попытке reminder в messages быть не должен.
+    first_messages = fake.chat_calls[0]["messages"]
+    assert not any("retry:" in m["content"] for m in first_messages)

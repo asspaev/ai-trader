@@ -306,6 +306,42 @@ async def test_news_agent_final_score_skips_llm_when_no_signals() -> None:
     assert fake.chat_calls == []
 
 
+async def test_news_agent_summarize_post_retries_on_missing_sentiment() -> None:
+    """Первый ответ без ``sentiment`` → ретрай с reminder → распарсили."""
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"summary": "только summary"}),
+            chat_response(
+                {"summary": "Полный ответ во второй попытке.", "sentiment": "neutral"}
+            ),
+        ]
+    )
+    agent = NewsAgent(fake, model="test-model")
+
+    result = await agent.summarize_post(_post())
+
+    assert result.sentiment is Sentiment.NEUTRAL
+    assert len(fake.chat_calls) == 2
+    # Во втором вызове должен быть reminder про невалидный JSON.
+    reminder = fake.chat_calls[1]["messages"][-1]["content"]
+    assert "распарсить" in reminder.lower()
+
+
+async def test_news_agent_summarize_post_raises_after_two_failed_parses() -> None:
+    fake = FakeOpenRouterClient(
+        chat_responses=[
+            chat_response({"summary": "no sentiment 1"}),
+            chat_response({"summary": "no sentiment 2"}),
+        ]
+    )
+    agent = NewsAgent(fake, model="test-model")
+
+    with pytest.raises(AgentJSONParseError):
+        await agent.summarize_post(_post())
+
+    assert len(fake.chat_calls) == 2
+
+
 async def test_news_agent_final_score_calls_llm_when_history_present() -> None:
     fake = FakeOpenRouterClient(
         chat_responses=[
