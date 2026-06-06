@@ -71,7 +71,7 @@ from app.services.binance.prices import (
     fetch_price_metrics,
 )
 from app.services.mock_exchange.executor import ExecutionResult, execute_decision
-from app.services.news.coindesk import CoinDeskNewsClient
+from app.services.news.coindesk import CoinDeskNewsClient, NewsPost
 from app.services.news.deduplicator import filter_new_posts
 from app.services.news.rag import fetch_relevant_history
 from app.services.news.storage import (
@@ -542,41 +542,25 @@ async def _news_branch(
             external_ids=[p.external_id for p in new_posts],
         )
 
-    summarized: list[SummarizedPost] = []
-    reused_count = 0
-    for post in new_posts:
-        cached = cached_by_eid.get(post.external_id)
-        reusable = _extract_reusable_summary(cached)
-
-        if reusable is not None:
-            cached_summary, cached_embedding = reusable
-            async with context.session_factory() as save_session:
-                await save_news_reusing_cached(
-                    save_session,
-                    post=post,
-                    summary_text=cached_summary.summary,
-                    summary_sentiment=cached_summary.sentiment.value,
-                    embedding=cached_embedding,
-                )
-                await save_session.commit()
-            summarized.append(SummarizedPost(post=post, summary=cached_summary))
-            reused_count += 1
-            continue
-
-        summary = await context.news_agent.summarize_post(
-            post, pipeline_run_id=pipeline_run_id
-        )
-        async with context.session_factory() as save_session:
-            await save_news_with_embedding(
-                save_session,
-                context.openrouter_client,  # type: ignore[arg-type]
+    # Per-post обработка параллельно через asyncio.gather: каждая
+    # задача делает свой LLM-summary + embedding + сохранение в
+    # отдельной транзакции — это I/O-bound работа, и при 10–20
+    # свежих постах последовательный цикл легко съедал весь
+    # бюджет шага (300с). gather сохраняет порядок результатов,
+    # поэтому хронология summaries в agenda-блоке не меняется.
+    post_outcomes = await asyncio.gather(
+        *(
+            _process_one_post(
+                context=context,
                 post=post,
-                summary_text=summary.summary,
-                summary_sentiment=summary.sentiment.value,
+                cached_by_eid=cached_by_eid,
                 pipeline_run_id=pipeline_run_id,
             )
-            await save_session.commit()
-        summarized.append(SummarizedPost(post=post, summary=summary))
+            for post in new_posts
+        )
+    )
+    summarized: list[SummarizedPost] = [item for item, _ in post_outcomes]
+    reused_count = sum(1 for _, reused in post_outcomes if reused)
 
     if reused_count:
         bound.info(
@@ -611,6 +595,52 @@ async def _news_branch(
         history=history,
         pipeline_run_id=pipeline_run_id,
     )
+
+
+async def _process_one_post(
+    *,
+    context: PipelineContext,
+    post: NewsPost,
+    cached_by_eid: dict[str, News],
+    pipeline_run_id: uuid.UUID,
+) -> tuple[SummarizedPost, bool]:
+    """Обработать одну новость: переиспользовать кэш либо вызвать LLM+embedding.
+
+    Возвращает пару ``(SummarizedPost, reused_from_cache)``. Любой провал
+    (LLM-ошибка, embedding-ошибка, БД) поднимается наверх — :func:`asyncio.gather`
+    приведёт это к падению NEWS-ветки, что в :func:`crypto_step` превратится в
+    ``NEWS_BRANCH_FAILED`` (поведение симметрично прежней последовательной версии).
+    """
+    cached = cached_by_eid.get(post.external_id)
+    reusable = _extract_reusable_summary(cached)
+
+    if reusable is not None:
+        cached_summary, cached_embedding = reusable
+        async with context.session_factory() as save_session:
+            await save_news_reusing_cached(
+                save_session,
+                post=post,
+                summary_text=cached_summary.summary,
+                summary_sentiment=cached_summary.sentiment.value,
+                embedding=cached_embedding,
+            )
+            await save_session.commit()
+        return SummarizedPost(post=post, summary=cached_summary), True
+
+    summary = await context.news_agent.summarize_post(
+        post, pipeline_run_id=pipeline_run_id
+    )
+    async with context.session_factory() as save_session:
+        await save_news_with_embedding(
+            save_session,
+            context.openrouter_client,  # type: ignore[arg-type]
+            post=post,
+            summary_text=summary.summary,
+            summary_sentiment=summary.sentiment.value,
+            pipeline_run_id=pipeline_run_id,
+        )
+        await save_session.commit()
+    return SummarizedPost(post=post, summary=summary), False
 
 
 # ---------- failure-path: запись HOLD/executed=False ----------
