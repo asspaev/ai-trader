@@ -217,7 +217,7 @@ TRADING_QUOTE_ASSET=USDT
 TRADING_DECISIONS_HISTORY_LIMIT=12
 TRADING_RAG_TOP_K=5
 TRADING_RAG_EXCLUDE_LAST_HOURS=24
-TRADING_PIPELINE_STEP_TIMEOUT_SECONDS=300
+TRADING_PIPELINE_STEP_TIMEOUT_SECONDS=600
 
 # --- Logging ---
 LOG_LEVEL=INFO
@@ -533,7 +533,7 @@ notify_pipeline_summary(pipeline_run_id) # после всех монет
 ### Таймауты
 
 - На вызов OpenRouter: 60 сек (см. `OPENROUTER_TIMEOUT_SECONDS`).
-- На обработку одной монеты: 300 сек (`TRADING_PIPELINE_STEP_TIMEOUT_SECONDS`). По таймауту: пишем `decision` с `action=HOLD`, `executed=false`, `not_executed_reason="STEP_TIMEOUT"`, переходим к следующей монете.
+- На обработку одной монеты: 600 сек (`TRADING_PIPELINE_STEP_TIMEOUT_SECONDS`). По таймауту: пишем `decision` с `action=HOLD`, `executed=false`, `not_executed_reason="STEP_TIMEOUT"`, переходим к следующей монете.
 
 ---
 

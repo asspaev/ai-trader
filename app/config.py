@@ -197,7 +197,7 @@ class TradingSettings(BaseSettings):
     decisions_history_limit: int = 12
     rag_top_k: int = 5
     rag_exclude_last_hours: int = 24
-    pipeline_step_timeout_seconds: int = 300
+    pipeline_step_timeout_seconds: int = 600
 
     @field_validator("symbols", mode="before")
     @classmethod
